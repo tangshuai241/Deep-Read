@@ -63,6 +63,10 @@ def load_config():
 
 
 def get_notes_dir(config):
+    # 环境变量覆盖（飞书 Bot 测试用）
+    env_override = os.environ.get("DEEPREAD_NOTES_DIR", "")
+    if env_override:
+        return env_override
     return config.get("paths", {}).get("notes_dir",
         os.path.join(os.path.dirname(__file__), "..", "notes"))
 

@@ -335,14 +335,21 @@ def main():
     sub_cmds = parser.add_subparsers(dest="mode")
 
     p_listen = sub_cmds.add_parser("listen", help="启动事件监听")
-    p_listen.add_argument("--max-events", type=int, default=0, help="最大事件数（0=不限）")
-    p_listen.add_argument("--reply", action="store_true", help="自动回复（默认只打印）")
+    p_listen.add_argument("--max-events", type=int, default=0)
+    p_listen.add_argument("--reply", action="store_true")
+    p_listen.add_argument("--notes-dir", default="", help="笔记输出目录（覆盖 config.yaml）")
 
     p_once = sub_cmds.add_parser("once", help="单次处理")
     p_once.add_argument("text", help="消息文本")
     p_once.add_argument("--user", default="default", help="用户 ID")
+    p_once.add_argument("--notes-dir", default="", help="笔记输出目录（覆盖 config.yaml）")
 
     args = parser.parse_args()
+
+    # 笔记输出目录覆盖
+    if getattr(args, "notes_dir", ""):
+        os.environ["DEEPREAD_NOTES_DIR"] = args.notes_dir
+        print(f"笔记输出: {args.notes_dir}")
 
     if args.mode == "listen":
         listen_events(max_events=args.max_events, reply_enabled=args.reply)
