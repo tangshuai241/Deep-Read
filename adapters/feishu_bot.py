@@ -46,6 +46,62 @@ def _find_lark_cli():
 
 LARK_CLI = _find_lark_cli()
 
+# ── 消息去重 ──
+RECENT_IDS = set()
+MAX_RECENT = 200
+
+
+def is_duplicate(message_id):
+    if not message_id:
+        return False
+    if message_id in RECENT_IDS:
+        return True
+    RECENT_IDS.add(message_id)
+    if len(RECENT_IDS) > MAX_RECENT:
+        RECENT_IDS.clear()  # 简单轮转
+    return False
+
+
+# ── 命令白名单 ──
+COMMAND_KEYWORDS = ["精读", "读《", "继续", "进入下一阶段", "跳过", "收尾",
+                     "复习", "进度", "慢思考", "搜索", "联想", "批判",
+                     "费曼", "苏格拉底", "/deepread", "/费曼", "/苏格拉底",
+                     "/联想", "/批判", "/复习", "/进度", "/慢思考", "/卡片"]
+
+GREETINGS = {"你好", "hi", "hello", "在吗", "在不在", "嗨", "哈喽", "哈啰",
+             "早上好", "下午好", "晚上好", "早", "好啊", "hey", "yo"}
+
+
+def match_command(text):
+    """匹配命令→返回 command_type 或 None"""
+    stripped = text.strip()
+    if stripped.lower() in GREETINGS:
+        return "greeting"
+    for kw in COMMAND_KEYWORDS:
+        if kw in stripped:
+            return "agent"
+    return None
+
+
+def quick_reply(text):
+    """无需 LLM 的快捷回复，返回 (reply_text, should_log_agent)"""
+    cmd = match_command(text)
+    if cmd == "greeting":
+        return ("你好～我是 DeepRead 阅读教练。\n"
+                "你可以：\n"
+                "• 精读《书名》第N章\n"
+                "• 查看进度\n"
+                "• 复习 / 慢思考\n"
+                "• 搜索 关键词"), False
+    if cmd == "agent":
+        return None, True  # 需要走 Agent
+    # 未知命令
+    return ("支持的命令：\n"
+            "  精读《书名》第N章\n"
+            "  继续 / 1跳过\n"
+            "  查看进度 / 复习 / 慢思考\n"
+            "  搜索 关键词"), False
+
 
 def get_agent_for_user(user_id):
     """获取或创建用户的 Agent 实例（磁盘恢复）"""
@@ -205,6 +261,13 @@ def listen_events(max_events=0, reply_enabled=False):
                     print("  ⚠ sender_id 或 content 为空，请检查上方结构并调整解析")
                 continue
 
+            # ── 消息去重 ──
+            msg_id = raw.get("message_id", raw.get("id", ""))
+            if is_duplicate(msg_id):
+                ts = time.strftime("%H:%M:%S")
+                print(f"[{ts}] 跳过重复消息 {msg_id}")
+                continue
+
             # JSON content → text
             if isinstance(content, str) and content.startswith("{"):
                 try:
@@ -213,23 +276,29 @@ def listen_events(max_events=0, reply_enabled=False):
                 except json.JSONDecodeError:
                     pass
 
+            if not content:
+                continue
+
             event_count += 1
             ts = time.strftime("%H:%M:%S")
             print(f"[{ts}] #{event_count} sender={sender_id[:20]}... text={content[:60]}")
 
-            # 处理 + 预览
-            response = handle_message(content, sender_id)
+            # ── 命令白名单 ──
+            qr, need_agent = quick_reply(content)
+            if qr:
+                response = qr
+            else:
+                response = handle_message(content, sender_id)
+
             preview = response[:100].replace('\n', ' ') + "..." if len(response) > 100 else response
-            print(f"  → {preview}")
+            label = "(快捷)" if qr else ""
+            print(f"  → {label} {preview}")
 
             # 回复（需显式开启）
             if reply_enabled:
-                # 优先回复到事件所在会话，确保显示为 Bot 在该会话里回复。
-                # sender_id 仅用于 DeepRead 会话映射。
-                if chat_id:
-                    ok = send_reply(chat_id, response, target_type="chat")
-                else:
-                    ok = send_reply(sender_id, response, target_type="user")
+                target = chat_id or sender_id
+                target_type = "chat" if chat_id else "user"
+                ok = send_reply(target, response, target_type=target_type)
                 if ok:
                     print(f"  ✓ 已发送")
                 else:
