@@ -7,7 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent import (LLMProvider, save_session, load_session, find_session_for_user,
-                    list_sessions, SESSION_DIR)
+                    list_sessions, SESSION_DIR, split_thinking_directive,
+                    should_enable_auto_thinking)
 
 
 def setup_module():
@@ -117,11 +118,58 @@ def test_deepseek_defaults_to_disable_thinking(monkeypatch):
         "deepseek",
         {"name": "DeepSeek", "base_url": "https://api.deepseek.com", "type": "openai"},
         "test-key",
-        "deepseek-v4-flash",
+        "deepseek-v4-pro",
         {"llm": {}}
     )
 
     assert provider.extra_body == {"thinking": {"type": "disabled"}}
+
+
+def test_deepseek_supports_auto_thinking(monkeypatch):
+    class DummyOpenAI:
+        def __init__(self, **kwargs):
+            pass
+
+    import types
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=DummyOpenAI))
+
+    provider = LLMProvider(
+        "deepseek",
+        {"name": "DeepSeek", "base_url": "https://api.deepseek.com", "type": "openai"},
+        "test-key",
+        "deepseek-v4-pro",
+        {"llm": {"thinking": "auto"}}
+    )
+
+    assert provider.thinking_mode == "auto"
+    assert provider.extra_body == {}
+
+    provider.set_thinking_for_request("enabled")
+    assert provider.extra_body == {"thinking": {"type": "enabled"}}
+
+    provider.set_thinking_for_request("disabled")
+    assert provider.extra_body == {"thinking": {"type": "disabled"}}
+
+
+def test_split_thinking_directive():
+    text, override = split_thinking_directive("/深思 总结我的回答")
+    assert text == "总结我的回答"
+    assert override == "enabled"
+
+    text, override = split_thinking_directive("/深思：总结我的回答")
+    assert text == "总结我的回答"
+    assert override == "enabled"
+
+    text, override = split_thinking_directive("/普通 你好")
+    assert text == "你好"
+    assert override == "disabled"
+
+
+def test_auto_thinking_router():
+    assert should_enable_auto_thinking("你好") is False
+    assert should_enable_auto_thinking("搜索 系统1") is False
+    assert should_enable_auto_thinking("总结我的回答，并指出我的盲点") is True
+    assert should_enable_auto_thinking("继续", stage="socratic") is True
 
 
 def test_openai_replays_reasoning_content(monkeypatch):

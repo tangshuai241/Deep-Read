@@ -30,6 +30,77 @@ SCRIPTS_DIR = Path(__file__).parent / "scripts"
 SKILL_DIR = None  # 延迟初始化
 SESSION_DIR = Path(__file__).parent / "state" / "sessions"
 
+THINKING_ENABLE_COMMANDS = (
+    "/深思", "/慢思考", "/thinking", "/think", "/reason",
+    "深思", "慢思考",
+)
+THINKING_DISABLE_COMMANDS = (
+    "/普通", "/快答", "/快速", "/no-thinking", "/nothink", "/normal",
+    "普通", "快答",
+)
+THINKING_FALLBACK_ENABLED = "请用更深入的方式继续当前阅读任务。"
+THINKING_FALLBACK_DISABLED = "请用普通模式继续当前阅读任务。"
+THINKING_DEEP_STAGES = {"feynman", "socratic", "associate", "wrapup"}
+
+
+def split_thinking_directive(text):
+    """Return (clean_text, override) where override is enabled/disabled/None."""
+    raw = str(text or "")
+    stripped = raw.strip()
+    lowered = stripped.lower()
+
+    for cmd in THINKING_ENABLE_COMMANDS:
+        cmd_lower = cmd.lower()
+        if lowered == cmd_lower or lowered.startswith((cmd_lower + " ", cmd_lower + ":", cmd_lower + "：")):
+            clean = stripped[len(cmd):].strip(" :：")
+            return clean or THINKING_FALLBACK_ENABLED, "enabled"
+
+    for cmd in THINKING_DISABLE_COMMANDS:
+        cmd_lower = cmd.lower()
+        if lowered == cmd_lower or lowered.startswith((cmd_lower + " ", cmd_lower + ":", cmd_lower + "：")):
+            clean = stripped[len(cmd):].strip(" :：")
+            return clean or THINKING_FALLBACK_DISABLED, "disabled"
+
+    return raw, None
+
+
+def should_enable_auto_thinking(text, stage=""):
+    """Cheap router for DeepSeek thinking=auto."""
+    stripped = str(text or "").strip()
+    if not stripped:
+        return False
+
+    compact = "".join(stripped.lower().split())
+    light_exact = {
+        "你好", "你好啊", "hi", "hello", "hey", "在吗", "在不在",
+        "进度", "查看进度", "状态", "帮助", "help", "/help",
+        "复习", "随机复习", "搜索", "查找",
+    }
+    if compact in light_exact:
+        return False
+
+    light_prefixes = ("搜索", "查找", "进度", "查看进度", "/help")
+    if any(compact.startswith(prefix) for prefix in light_prefixes):
+        return False
+
+    deep_keywords = (
+        "精读", "继续读", "读《", "第", "下一阶段", "进入下一阶段",
+        "费曼", "苏格拉底", "批判", "反驳", "挑战",
+        "联想", "关联", "收尾", "总结", "总结我的回答", "复盘",
+        "解释", "为什么", "怎么理解", "盲点", "反思",
+        "深入", "深度", "慢思考", "深思", "推理",
+    )
+    if any(keyword in stripped for keyword in deep_keywords):
+        return True
+
+    if stage in THINKING_DEEP_STAGES:
+        if compact in {"继续", "下一步", "跳过", "进入下一阶段"}:
+            return True
+        if len(stripped) >= 20:
+            return True
+
+    return len(stripped) >= 80
+
 
 # ═══════════════════════════════════════════════════════
 # 配置
@@ -262,7 +333,7 @@ PROVIDER_CONFIGS = {
         "name": "DeepSeek",
         "base_url": "https://api.deepseek.com",
         "key_env": "DEEPSEEK_API_KEY",
-        "default_model": "deepseek-v4-flash",
+        "default_model": "deepseek-v4-pro",
         "type": "openai",
     },
     "anthropic": {
@@ -328,6 +399,7 @@ class LLMProvider:
         self.model = model
         self.client = None
         self.extra_body = {}
+        self.thinking_mode = None
 
         # 自定义 base_url（config 优先于 provider 默认）
         base_url = pcfg.get("base_url", "")
@@ -344,9 +416,9 @@ class LLMProvider:
             # tool calls require replaying provider-specific reasoning_content.
             if thinking in ("", None):
                 thinking = "disabled"
-            thinking_type = self._normalize_thinking(thinking)
-            if thinking_type:
-                self.extra_body["thinking"] = {"type": thinking_type}
+            self.thinking_mode = self._normalize_thinking(thinking, allow_auto=True)
+            if self.thinking_mode in ("enabled", "disabled"):
+                self.extra_body["thinking"] = {"type": self.thinking_mode}
 
         if self.api_type == "anthropic":
             import anthropic
@@ -359,17 +431,27 @@ class LLMProvider:
             self.client = openai.OpenAI(**kwargs)
 
     @staticmethod
-    def _normalize_thinking(value):
-        """Return DeepSeek thinking toggle value: enabled/disabled/None."""
+    def _normalize_thinking(value, allow_auto=False):
+        """Return DeepSeek thinking toggle value: enabled/disabled/auto/None."""
         if isinstance(value, bool):
             return "enabled" if value else "disabled"
         if isinstance(value, str):
             v = value.strip().lower()
+            if allow_auto and v in ("auto", "smart", "adaptive"):
+                return "auto"
             if v in ("enabled", "enable", "on", "true", "yes", "1"):
                 return "enabled"
             if v in ("disabled", "disable", "off", "false", "no", "0"):
                 return "disabled"
         return None
+
+    def set_thinking_for_request(self, thinking_type):
+        """Temporarily override DeepSeek thinking for the next request."""
+        if self.api_type != "openai" or self.provider_id != "deepseek":
+            return
+        normalized = self._normalize_thinking(thinking_type)
+        if normalized:
+            self.extra_body["thinking"] = {"type": normalized}
 
     @staticmethod
     def extract_reasoning_content(raw_response):
@@ -588,6 +670,24 @@ def list_sessions():
     return sessions
 
 
+def read_current_stage(config, user_id="default"):
+    state_dir = config.get("paths", {}).get("state_dir", str(Path(__file__).parent / "state"))
+    state_path = Path(state_dir).expanduser()
+    if not state_path.is_absolute():
+        state_path = Path(__file__).parent / state_path
+    current = state_path / user_id / "current.json"
+    if not current.exists() and user_id != "default":
+        current = state_path / "default" / "current.json"
+    if not current.exists():
+        return ""
+    try:
+        with open(current, encoding="utf-8-sig") as f:
+            data = json.load(f)
+        return data.get("current", {}).get("stage", "") or ""
+    except Exception:
+        return ""
+
+
 # ═══════════════════════════════════════════════════════
 # Agent 主循环
 # ═══════════════════════════════════════════════════════
@@ -616,6 +716,7 @@ class DeepReadAgent:
         self.messages = []
         self.meta = {"book": "", "chapter": "", "provider": pid, "model": model, "user_id": user_id}
         self._last_user_input = ""
+        self._thinking_override = None
 
         if not session_id:
             log_session_start(self.session_id, pid, model, user_id)
@@ -677,9 +778,26 @@ class DeepReadAgent:
         """可编程接口：处理一条消息，返回 (response_text, tool_calls_info)
         供飞书/微信/Web 等外部入口调用。
         """
+        user_input, self._thinking_override = split_thinking_directive(user_input)
         self._last_user_input = user_input
         self.messages.append({"role": "user", "content": user_input})
         return self._call_api_internal(silent=silent)
+
+    def _select_thinking_for_request(self):
+        if not hasattr(self.llm, "set_thinking_for_request"):
+            return
+        mode = getattr(self.llm, "thinking_mode", None)
+        if not mode:
+            return
+
+        thinking = mode
+        if self._thinking_override:
+            thinking = self._thinking_override
+        elif mode == "auto":
+            stage = read_current_stage(self.config, self.user_id)
+            thinking = "enabled" if should_enable_auto_thinking(self._last_user_input, stage) else "disabled"
+
+        self.llm.set_thinking_for_request(thinking)
 
     def _call_api_internal(self, silent=True):
         """内部 API 调用，返回 (text, tool_summary)"""
@@ -696,6 +814,7 @@ class DeepReadAgent:
             raw = None
             text = ""
             tool_calls = []
+            self._select_thinking_for_request()
 
             while attempt < max_retries:
                 try:
@@ -714,6 +833,7 @@ class DeepReadAgent:
                         error_msg = f"API 错误（重试{max_retries}次后）: {e}"
                         if not silent:
                             print(f"\n{error_msg}")
+                        self._thinking_override = None
                         return error_msg, []
                     time.sleep(1)
 
@@ -781,6 +901,7 @@ class DeepReadAgent:
                     save_session(self.session_id, self.messages, self.meta)
                 except Exception:
                     pass
+                self._thinking_override = None
                 return text, last_tool_results
 
     def run(self):
@@ -803,21 +924,26 @@ class DeepReadAgent:
                 print(f"会话已保存: {self.session_id}")
                 break
 
+            ui, self._thinking_override = split_thinking_directive(ui)
             self._last_user_input = ui
             if ui == "/help":
                 print("命令: /exit 退出 | /state 查看状态 | /tools 列出工具 | /session 会话信息")
                 print("精读: 读《书名》第N章 | 继续: 进入下一阶段")
+                self._thinking_override = None
                 continue
             if ui == "/state":
                 print(execute_tool("read_state", {}))
+                self._thinking_override = None
                 continue
             if ui == "/tools":
                 for t in TOOLS_ANTHROPIC:
                     print(f"  {t['name']}: {t['description'][:80]}")
+                self._thinking_override = None
                 continue
             if ui == "/session":
                 print(f"ID: {self.session_id} | {self.llm.name}/{self.llm.model}")
                 print(f"书: {self.meta.get('book', '-')} | 消息: {len(self.messages)}")
+                self._thinking_override = None
                 continue
 
             self.messages.append({"role": "user", "content": ui})

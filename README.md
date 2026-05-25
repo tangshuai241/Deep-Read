@@ -125,8 +125,8 @@ deepread/
 编辑 `config.yaml`：
 
 - `llm.provider` — deepseek / anthropic / openai（留空自动检测）
-- `llm.model` — 模型 ID（留空用默认）
-- `llm.thinking` — DeepSeek thinking 开关，默认 `disabled`
+- `llm.model` — 模型 ID（默认 `deepseek-v4-pro`）
+- `llm.thinking` — DeepSeek thinking 开关：`auto` / `disabled` / `enabled`
 - `note.template` — obsidian-three-section / cornell / zettelkasten / plain
 - `cognition.enabled` — 是否启用认知画像
 - `integrations.weread.enabled` — 是否启用微信读书
@@ -145,8 +145,8 @@ A: `paths.notes_dir` 指定的 Obsidian vault 路径。
 **Q: 支持其他模型吗？**
 A: 所有 OpenAI 兼容 API 都支持。在 config.yaml 设置 `llm.provider: openai` 并配置对应的 base_url 和 api_key。
 
-**Q: DeepSeek 报 reasoning_content 错误？**
-A: v2.1.1 默认关闭 DeepSeek thinking。若手动开启 thinking，DeepRead 会保存并回传 `reasoning_content`。
+**Q: DeepSeek Thinking 怎么用？**
+A: 推荐 `llm.thinking: auto`。DeepRead 会在精读、批判、联想、总结回答等深任务启用 Thinking，寒暄、进度、搜索等轻量消息关闭。手机端可用 `/深思 总结我的回答` 强制开启本轮 Thinking，用 `/普通 你好` 强制关闭本轮 Thinking。DeepRead 会保存并回传 `reasoning_content`，但不会展示它。
 
 **Q: agent.py 和 Claude Code 什么关系？**
 A: agent.py 是独立运行时，不依赖 Claude Code。Claude Code 保留作为开发者调试入口。

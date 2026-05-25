@@ -148,7 +148,7 @@
 | 主入口 | agent.py（替代 Claude Code） | 独立部署，不需要 Claude Code |
 | 多后端 | 抽象 LLMProvider | 用户自由选择模型，自动检测 |
 | 默认后端 | DeepSeek | 国内直连，便宜 |
-| 默认模型 | deepseek-v4-flash | v4 Pro 需要 reasoning_content 回传 |
+| 默认模型 | deepseek-v4-pro | 默认启用 auto thinking，深任务使用 Pro 推理 |
 | 飞书集成 | process_message() 直调 | 保持会话连续性 |
 | Skill 存放 | deepread/skill/ 自包含 | 不依赖外部路径 |
 | 日志格式 | NDJSON | 可追加、可 grep、可结构化 |

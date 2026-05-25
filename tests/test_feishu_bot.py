@@ -73,3 +73,8 @@ def test_send_reply_can_fallback_to_user_id(monkeypatch):
     assert "--user-id" in cmd
     assert "ou_test" in cmd
     assert "--chat-id" not in cmd
+
+
+def test_thinking_commands_go_to_agent():
+    assert feishu_bot.match_command("/深思 总结我的回答") == "agent"
+    assert feishu_bot.match_command("/普通 你好") == "agent"
