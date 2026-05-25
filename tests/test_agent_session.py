@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from agent import (save_session, load_session, find_session_for_user,
+from agent import (LLMProvider, save_session, load_session, find_session_for_user,
                     list_sessions, SESSION_DIR)
 
 
@@ -103,3 +103,75 @@ def test_session_contains_required_fields(monkeypatch):
             assert "messages" in loaded
         finally:
             agent.SESSION_DIR = old_dir
+
+
+def test_deepseek_defaults_to_disable_thinking(monkeypatch):
+    class DummyOpenAI:
+        def __init__(self, **kwargs):
+            pass
+
+    import types
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=DummyOpenAI))
+
+    provider = LLMProvider(
+        "deepseek",
+        {"name": "DeepSeek", "base_url": "https://api.deepseek.com", "type": "openai"},
+        "test-key",
+        "deepseek-v4-flash",
+        {"llm": {}}
+    )
+
+    assert provider.extra_body == {"thinking": {"type": "disabled"}}
+
+
+def test_openai_replays_reasoning_content(monkeypatch):
+    captured = {}
+
+    class DummyMessage:
+        content = "ok"
+        tool_calls = None
+
+    class DummyChoice:
+        message = DummyMessage()
+
+    class DummyResponse:
+        choices = [DummyChoice()]
+
+    class DummyCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return DummyResponse()
+
+    class DummyChat:
+        completions = DummyCompletions()
+
+    class DummyOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = DummyChat()
+
+    import types
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=DummyOpenAI))
+
+    provider = LLMProvider(
+        "openai",
+        {"name": "OpenAI", "base_url": "", "type": "openai"},
+        "test-key",
+        "gpt-test",
+        {"llm": {}}
+    )
+
+    messages = [
+        {"role": "user", "content": "你好"},
+        {
+            "role": "assistant",
+            "content": "你好，我想一下",
+            "reasoning_content": "hidden chain"
+        },
+        {"role": "user", "content": "继续"}
+    ]
+
+    provider.chat("system", messages, [])
+    replayed = captured["messages"][2]
+
+    assert replayed["role"] == "assistant"
+    assert replayed["reasoning_content"] == "hidden chain"

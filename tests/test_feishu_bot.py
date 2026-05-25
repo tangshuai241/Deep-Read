@@ -1,0 +1,62 @@
+"""测试飞书适配器（不调用真实 lark-cli）。"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from adapters import feishu_bot
+
+
+def test_format_reply_text_flattens_multiline():
+    text = "第一行\n\n第二行\n- 第三行"
+
+    result = feishu_bot.format_reply_text(text)
+
+    assert "\n" not in result
+    assert "第一行" in result
+    assert "第二行" in result
+    assert "- 第三行" in result
+
+
+def test_send_reply_prefers_chat_id(monkeypatch):
+    captured = {}
+
+    class DummyResult:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return DummyResult()
+
+    monkeypatch.setattr(feishu_bot.subprocess, "run", fake_run)
+
+    assert feishu_bot.send_reply("oc_test", "hello", target_type="chat") is True
+    cmd = captured["cmd"]
+
+    assert "--chat-id" in cmd
+    assert "oc_test" in cmd
+    assert "--text" in cmd
+    assert "--user-id" not in cmd
+    assert "--as" in cmd
+    assert cmd[cmd.index("--as") + 1] == "bot"
+
+
+def test_send_reply_can_fallback_to_user_id(monkeypatch):
+    captured = {}
+
+    class DummyResult:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return DummyResult()
+
+    monkeypatch.setattr(feishu_bot.subprocess, "run", fake_run)
+
+    assert feishu_bot.send_reply("ou_test", "hello", target_type="user") is True
+    cmd = captured["cmd"]
+
+    assert "--user-id" in cmd
+    assert "ou_test" in cmd
+    assert "--chat-id" not in cmd

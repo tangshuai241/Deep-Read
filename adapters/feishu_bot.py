@@ -36,6 +36,7 @@ def _find_lark_cli():
     """查找 lark-cli 路径（处理 Windows .cmd 后缀）"""
     npm_dir = os.path.join(os.environ.get("APPDATA", ""), "npm")
     for candidate in [
+        os.path.join(npm_dir, "node_modules", "@larksuite", "cli", "bin", "lark-cli.exe"),
         os.path.join(npm_dir, "lark-cli.cmd"),   # Windows npm
         os.path.join(npm_dir, "lark-cli"),        # Unix/Git Bash wrapper
     ]:
@@ -64,17 +65,33 @@ def handle_message(text, user_id="default"):
     return response
 
 
-def send_reply(user_id, text):
+def format_reply_text(text):
+    """把 Agent 回复压成飞书移动端更稳定的单条纯文本。
+
+    lark-cli on Windows and Feishu mobile rendering are both more reliable
+    when the message argument does not contain literal newlines.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = re.sub(r"\n\s*\n+", "  ", text)
+    text = re.sub(r"\n+", "  ", text)
+    text = re.sub(r"[ \t]{3,}", "  ", text)
+    return text
+
+
+def send_reply(receive_id, text, target_type="user"):
     """通过 lark-cli 发送回复"""
+    text = format_reply_text(text)
     # 截断过长回复（飞书单条消息有长度限制）
     if len(text) > 4000:
         text = text[:4000] + "\n\n(回复过长，已截断。在终端用 python agent.py --resume 继续)"
 
+    target_flag = "--chat-id" if target_type == "chat" else "--user-id"
+    print(f"  [发送内容: {len(text)} 字符, target={target_type}]")
     try:
         result = subprocess.run(
             [LARK_CLI, "im", "+messages-send",
-             "--user-id", user_id,
-             "--markdown", text,
+             target_flag, receive_id,
+             "--text", text,
              "--as", "bot"],
             capture_output=True, text=True, timeout=15, encoding='utf-8',
             env={**os.environ, "PYTHONIOENCODING": "utf-8"}
@@ -147,8 +164,9 @@ def listen_events(max_events=0, reply_enabled=False):
             except json.JSONDecodeError:
                 continue
 
-            # ── 提取 sender_id（兼容扁平和嵌套）──
+            # ── 提取 sender_id / chat_id（兼容扁平和嵌套）──
             sender_id = raw.get("sender_id", "")
+            chat_id = raw.get("chat_id", "")
             if not sender_id and "event" in raw:
                 ev = raw["event"]
                 sender = ev.get("sender", {})
@@ -160,6 +178,11 @@ def listen_events(max_events=0, reply_enabled=False):
                         sender_id = sid
                 if not sender_id:
                     sender_id = ev.get("sender_id", "")
+                if not chat_id:
+                    chat_id = ev.get("chat_id", "")
+                    msg = ev.get("message", {})
+                    if isinstance(msg, dict):
+                        chat_id = chat_id or msg.get("chat_id", "")
 
             # ── 提取 content（兼容扁平和嵌套）──
             content = raw.get("content", "")
@@ -201,7 +224,12 @@ def listen_events(max_events=0, reply_enabled=False):
 
             # 回复（需显式开启）
             if reply_enabled:
-                ok = send_reply(sender_id, response)
+                # 优先回复到事件所在会话，确保显示为 Bot 在该会话里回复。
+                # sender_id 仅用于 DeepRead 会话映射。
+                if chat_id:
+                    ok = send_reply(chat_id, response, target_type="chat")
+                else:
+                    ok = send_reply(sender_id, response, target_type="user")
                 if ok:
                     print(f"  ✓ 已发送")
                 else:

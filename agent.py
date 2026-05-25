@@ -262,7 +262,7 @@ PROVIDER_CONFIGS = {
         "name": "DeepSeek",
         "base_url": "https://api.deepseek.com",
         "key_env": "DEEPSEEK_API_KEY",
-        "default_model": "deepseek-chat",
+        "default_model": "deepseek-v4-flash",
         "type": "openai",
     },
     "anthropic": {
@@ -327,6 +327,7 @@ class LLMProvider:
         self.api_type = pcfg["type"]
         self.model = model
         self.client = None
+        self.extra_body = {}
 
         # 自定义 base_url（config 优先于 provider 默认）
         base_url = pcfg.get("base_url", "")
@@ -334,6 +335,18 @@ class LLMProvider:
             custom_url = config.get("llm", {}).get("base_url", "")
             if custom_url:
                 base_url = custom_url
+
+        if self.api_type == "openai" and self.provider_id == "deepseek":
+            llm_cfg = config.get("llm", {}) if config else {}
+            thinking = llm_cfg.get("thinking", "")
+            # DeepSeek V4 defaults to thinking mode. Disable it for normal Bot
+            # usage unless the user explicitly opts in, otherwise multi-turn
+            # tool calls require replaying provider-specific reasoning_content.
+            if thinking in ("", None):
+                thinking = "disabled"
+            thinking_type = self._normalize_thinking(thinking)
+            if thinking_type:
+                self.extra_body["thinking"] = {"type": thinking_type}
 
         if self.api_type == "anthropic":
             import anthropic
@@ -344,6 +357,41 @@ class LLMProvider:
             if base_url:
                 kwargs["base_url"] = base_url
             self.client = openai.OpenAI(**kwargs)
+
+    @staticmethod
+    def _normalize_thinking(value):
+        """Return DeepSeek thinking toggle value: enabled/disabled/None."""
+        if isinstance(value, bool):
+            return "enabled" if value else "disabled"
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("enabled", "enable", "on", "true", "yes", "1"):
+                return "enabled"
+            if v in ("disabled", "disable", "off", "false", "no", "0"):
+                return "disabled"
+        return None
+
+    @staticmethod
+    def extract_reasoning_content(raw_response):
+        """Read provider-specific reasoning_content without displaying it."""
+        try:
+            msg = raw_response.choices[0].message
+        except Exception:
+            return ""
+
+        reasoning = getattr(msg, "reasoning_content", None)
+        if reasoning:
+            return reasoning
+
+        extra = getattr(msg, "model_extra", None)
+        if isinstance(extra, dict):
+            return extra.get("reasoning_content", "") or ""
+
+        try:
+            data = msg.model_dump()
+            return data.get("reasoning_content", "") or ""
+        except Exception:
+            return ""
 
     def chat(self, system_prompt, messages, tools):
         """发送消息，返回 (text, tool_calls, raw_response)"""
@@ -408,6 +456,7 @@ class LLMProvider:
                 # 有 tool_calls 的 assistant 消息
                 tc_list = []
                 text_content = ""
+                reasoning_content = m.get("reasoning_content", "")
                 for block in m["content"]:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
                         tc_list.append({
@@ -417,9 +466,13 @@ class LLMProvider:
                         })
                     elif isinstance(block, dict) and block.get("type") == "text":
                         text_content += block.get("text", "")
+                    elif isinstance(block, dict) and block.get("type") == "reasoning":
+                        reasoning_content += block.get("text", "")
                     elif isinstance(block, str):
                         text_content += block
                 msg = {"role": "assistant", "content": text_content or None}
+                if reasoning_content:
+                    msg["reasoning_content"] = reasoning_content
                 if tc_list:
                     msg["tool_calls"] = tc_list
                 openai_messages.append(msg)
@@ -429,14 +482,21 @@ class LLMProvider:
                     # 提取 text
                     texts = [b.get("text", "") if isinstance(b, dict) else str(b) for b in content]
                     content = "".join(texts)
-                openai_messages.append({"role": role, "content": content})
+                msg = {"role": role, "content": content}
+                if role == "assistant" and m.get("reasoning_content"):
+                    msg["reasoning_content"] = m["reasoning_content"]
+                openai_messages.append(msg)
 
-        response = self.client.chat.completions.create(
+        kwargs = dict(
             model=self.model,
             messages=openai_messages,
             tools=tools,
             max_tokens=4096
         )
+        if self.extra_body:
+            kwargs["extra_body"] = self.extra_body
+
+        response = self.client.chat.completions.create(**kwargs)
 
         choice = response.choices[0]
         msg = choice.message
@@ -693,13 +753,15 @@ class DeepReadAgent:
                             "name": tname, "content": tresult
                         })
                 else:
+                    reasoning_content = self.llm.extract_reasoning_content(raw)
                     self.messages.append({
                         "role": "assistant",
                         "content": [{"type": "text", "text": text}] + [
                             {"type": "tool_use", "id": tc["id"],
                              "name": tc["name"], "input": tc["input"]}
                             for tc in tool_calls
-                        ]
+                        ],
+                        "reasoning_content": reasoning_content
                     })
                     for tid, tname, tresult in last_tool_results:
                         self.messages.append({
@@ -708,7 +770,12 @@ class DeepReadAgent:
                         })
                 continue  # 继续工具调用循环
             else:
-                self.messages.append({"role": "assistant", "content": text})
+                msg = {"role": "assistant", "content": text}
+                if self.llm.api_type == "openai":
+                    reasoning_content = self.llm.extract_reasoning_content(raw)
+                    if reasoning_content:
+                        msg["reasoning_content"] = reasoning_content
+                self.messages.append(msg)
                 self._update_meta(text, [], last_tool_results)
                 try:
                     save_session(self.session_id, self.messages, self.meta)
