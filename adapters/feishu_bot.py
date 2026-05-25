@@ -113,18 +113,46 @@ def listen_events(max_events=0, reply_enabled=False):
                 continue
 
             try:
-                event = json.loads(line)
+                raw = json.loads(line)
             except json.JSONDecodeError:
                 continue
 
-            # 提取字段
-            sender_id = event.get("sender_id", "")
-            content = event.get("content", "")
+            # ── 提取 sender_id（兼容扁平和嵌套）──
+            sender_id = raw.get("sender_id", "")
+            if not sender_id and "event" in raw:
+                ev = raw["event"]
+                sender = ev.get("sender", {})
+                if isinstance(sender, dict):
+                    sid = sender.get("sender_id", {})
+                    if isinstance(sid, dict):
+                        sender_id = sid.get("open_id", "")
+                    elif isinstance(sid, str):
+                        sender_id = sid
+                if not sender_id:
+                    sender_id = ev.get("sender_id", "")
+
+            # ── 提取 content（兼容扁平和嵌套）──
+            content = raw.get("content", "")
+            if not content and "event" in raw:
+                ev = raw["event"]
+                msg = ev.get("message", {})
+                if isinstance(msg, dict):
+                    content = msg.get("content", "")
+                if not content:
+                    content = ev.get("content", "")
+
+            # 首条打印完整原始结构用于调试
+            if event_count == 0:
+                ts0 = time.strftime("%H:%M:%S")
+                print(f"[{ts0}] 首条原始事件结构:")
+                print(json.dumps(raw, ensure_ascii=False, indent=2)[:500])
 
             if not sender_id or not content:
+                if event_count == 0:
+                    print("  ⚠ sender_id 或 content 为空，请检查上方结构并调整解析")
                 continue
 
-            # 处理 JSON content（可能是字符串也可能是对象）
+            # JSON content → text
             if isinstance(content, str) and content.startswith("{"):
                 try:
                     content_obj = json.loads(content)
@@ -134,16 +162,14 @@ def listen_events(max_events=0, reply_enabled=False):
 
             event_count += 1
             ts = time.strftime("%H:%M:%S")
-            print(f"[{ts}] #{event_count} 来自 {sender_id}: {content[:80]}")
+            print(f"[{ts}] #{event_count} sender={sender_id[:20]}... text={content[:60]}")
 
-            # 处理消息
+            # 处理 + 预览
             response = handle_message(content, sender_id)
-
-            # 显示回复预览
             preview = response[:100].replace('\n', ' ') + "..." if len(response) > 100 else response
             print(f"  → {preview}")
 
-            # 发送回复
+            # 回复（需显式开启）
             if reply_enabled:
                 ok = send_reply(sender_id, response)
                 if ok:
