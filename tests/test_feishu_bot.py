@@ -11,10 +11,23 @@ def test_format_reply_text_flattens_multiline():
 
     result = feishu_bot.format_reply_text(text)
 
-    assert "\n" not in result
+    # 双换行 → 单换行，保留基本可读性
+    assert "\n\n" not in result
     assert "第一行" in result
     assert "第二行" in result
-    assert "- 第三行" in result
+    assert "• 第三行" in result
+
+
+def test_format_reply_text_strips_markdown():
+    text = "**系统1**的*认知放松*很重要\n\n`代码`和~~删除~~\n\n[链接](http://x)"
+    result = feishu_bot.format_reply_text(text)
+    assert "**" not in result
+    assert "*" not in result
+    assert "`" not in result
+    assert "~~" not in result
+    assert "[链接]" not in result
+    assert "系统1" in result
+    assert "认知放松" in result
 
 
 def test_send_reply_prefers_chat_id(monkeypatch):

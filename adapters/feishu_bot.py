@@ -122,14 +122,27 @@ def handle_message(text, user_id="default"):
 
 
 def format_reply_text(text):
-    """把 Agent 回复压成飞书移动端更稳定的单条纯文本。
+    """Agent 回复 → 飞书纯文本。
 
-    lark-cli on Windows and Feishu mobile rendering are both more reliable
-    when the message argument does not contain literal newlines.
+    1. 去除纯文本无意义的 Markdown 标记（飞书不渲染）
+    2. 多行压成单条，手机端更稳定
     """
+    # 去 Markdown（飞书纯文本不需要）
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)   # **粗体**
+    text = re.sub(r'\*(.+?)\*', r'\1', text)        # *斜体*
+    text = re.sub(r'`(.+?)`', r'\1', text)          # `代码`
+    text = re.sub(r'~~(.+?)~~', r'\1', text)        # ~~删除线~~
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)  # 标题
+    text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)       # 引用
+    text = re.sub(r'^[-*+]\s+', '• ', text, flags=re.MULTILINE) # 无序列表
+    text = re.sub(r'^\d+\.\s+', '', text, flags=re.MULTILINE)   # 有序列表
+    text = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', text) # 链接
+    text = re.sub(r'\|', ' ', text)                 # 表格分隔符
+    text = re.sub(r'-{3,}', '', text)               # 水平线
+
+    # 多行 → 单条
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    text = re.sub(r"\n\s*\n+", "  ", text)
-    text = re.sub(r"\n+", "  ", text)
+    text = re.sub(r"\n\s*\n+", "\n", text)
     text = re.sub(r"[ \t]{3,}", "  ", text)
     return text
 
