@@ -189,22 +189,22 @@ log_*()        → logs/<sid>.log
 
 | 维度 | 状态 | 判断 |
 |------|:--:|------|
-| 个人自用 | ✅ | agent.py 可独立完成四阶段精读 |
+| 个人自用 | ✅ | agent.py 独立完成四阶段精读（E2E 已验收） |
 | 本地可移植 | ✅ | init.py + config.yaml + skill/ 自包含 |
 | 可分享给技术用户 | ✅ | pip install + API Key 即可，有 doctor 自检 |
-| 飞书入口 | 🔌 | process_message() 接口就绪，单次调用可用，事件流待实现 |
+| Git | ✅ | 已初始化，27 文件 3766 行 |
 | 错误恢复 | ✅ | 日志、重试、崩溃恢复文件、备份 |
+| 飞书入口 | 🔌 | process_message() + 会话映射就绪，事件流进行中 |
 | 测试 | ⬜ | 最小测试集待建 |
-| Git | ⬜ | 仓库待初始化 |
 
 ## 七、后续计划
 
 ```
-P0 — 端到端验收：agent.py 独立完成一章完整精读
-P1 — 飞书事件流：lark-cli event consume → handle_message → 自动回复
-P2 — 最小测试集：tests/test_state.py, test_write_note.py, ...
-P3 — Git 初始化 + 回滚能力
-P4 — 多书源：paste 文本 > Web > PDF > 微信读书
+P0 — ✅ 已完成
+P1 — 🔌 飞书事件流：lark-cli event consume → handle_message → 自动回复（当前）
+P2 — 最小测试集：state / write_note / search / extract / session
+P3 — 外部用户试装：干净环境从零安装验证
+P4 — 多书源：paste 文本 → Web 文章 → PDF → 微信读书
 P5 — 阅读统计 / 概念地图 / 模板增强
 ```
 
