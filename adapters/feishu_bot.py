@@ -31,6 +31,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent import DeepReadAgent, find_session_for_user
 
+# 自动定位 lark-cli 可执行文件
+def _find_lark_cli():
+    """查找 lark-cli 路径（处理 Windows .cmd 后缀）"""
+    npm_dir = os.path.join(os.environ.get("APPDATA", ""), "npm")
+    for candidate in [
+        os.path.join(npm_dir, "lark-cli.cmd"),   # Windows npm
+        os.path.join(npm_dir, "lark-cli"),        # Unix/Git Bash wrapper
+    ]:
+        if os.path.exists(candidate):
+            return candidate
+    return "lark-cli"  # fallback: hope it's in PATH
+
+LARK_CLI = _find_lark_cli()
+
 
 def get_agent_for_user(user_id):
     """获取或创建用户的 Agent 实例（磁盘恢复）"""
@@ -58,7 +72,7 @@ def send_reply(user_id, text):
 
     try:
         result = subprocess.run(
-            ["lark-cli", "im", "+messages-send",
+            [LARK_CLI, "im", "+messages-send",
              "--user-id", user_id,
              "--markdown", text,
              "--as", "bot"],
@@ -95,7 +109,7 @@ def listen_events(max_events=0, reply_enabled=False):
         print(f"最大事件数: {max_events}")
     print()
 
-    cmd = ["lark-cli", "event", "consume", "im.message.receive_v1"]
+    cmd = [LARK_CLI, "event", "consume", "im.message.receive_v1", "--as", "bot"]
     if max_events:
         cmd.extend(["--max-events", str(max_events)])
 
@@ -104,6 +118,22 @@ def listen_events(max_events=0, reply_enabled=False):
         text=True, encoding='utf-8',
         env={**os.environ, "PYTHONIOENCODING": "utf-8"}
     )
+
+    # 等待启动完成
+    time.sleep(3)
+
+    # 检查进程是否启动失败
+    if proc.poll() is not None:
+        err = proc.stderr.read()
+        print(f"  lark-cli 启动失败 (code={proc.returncode})")
+        if err:
+            for line in err.strip().split('\n')[:10]:
+                print(f"  [lark-cli] {line}")
+        return
+
+    print("  lark-cli 已启动，等待飞书消息...")
+    print("  现在用手机给 Bot 发一条消息")
+    print()
 
     event_count = 0
     try:
