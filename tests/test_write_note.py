@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from write_note import (create_note, update_section, append_section,
                          finalize_note, compile_note, slugify, SECTION_MAP,
-                         normalize_explore_text)
+                         normalize_explore_text, compile_note_content)
 
 
 def setup_module():
@@ -194,6 +194,41 @@ def test_compile_preserves_chapter_and_normalizes_sections():
         assert "\n## 联想\n" not in content
         assert "- 问题一？" in content
         assert "- 问题二？" in content
+
+
+def test_compile_content_adds_precise_links_without_touching_chapter():
+    content = (
+        "---\n"
+        "书名: 《思考快与慢》\n"
+        "章节: 7.字母\"B\"与数字\"13\"\n"
+        "---\n"
+        "## 📖 引用原文\n"
+        "> 引用\n\n"
+        "## 💭 我的理解\n"
+        "WYSIATI 的底层是系统1根据片面信息构建故事，并形成确认偏误。\n\n"
+        "## 🔗 让我想到\n"
+        "它也能解释光环效应，以及投资中看到利好就加仓。\n\n"
+        "## ❓ 待探索\n"
+    )
+    suggestions = {
+        "body_links": [
+            {"title": "系统1", "reason": "核心机制"},
+            {"title": "确认偏误", "reason": "核心机制"},
+            {"title": "光环效应", "reason": "具体表现"},
+        ],
+        "related_links": [
+            {"title": "对基金加仓行为自我分析", "reason": "个人经验：投资场景中的单侧信息判断"},
+        ],
+    }
+
+    compiled = compile_note_content(content, suggestions=suggestions)
+
+    assert '章节: 7.字母"B"与数字"13"' in compiled
+    assert "[[系统1]]" in compiled
+    assert "[[确认偏误]]" in compiled
+    assert "[[光环效应]]" in compiled
+    assert "### 相关旧笔记 / 延伸阅读" in compiled
+    assert "[[对基金加仓行为自我分析]]" in compiled
 
 
 def test_normalize_explore_text_dedupes_items():

@@ -182,6 +182,13 @@ def extract_frontmatter(content):
     return "", content
 
 
+def extract_frontmatter_value(frontmatter, key):
+    match = re.search(rf"^{re.escape(key)}:\s*(.+)$", frontmatter, re.M)
+    if not match:
+        return ""
+    return match.group(1).strip().strip('"').strip("'")
+
+
 def extract_sections(content):
     sections = {}
     current = None
@@ -214,7 +221,115 @@ def normalize_connection_section(text):
     return text
 
 
-def compile_note_content(content):
+def strip_extension_links(text):
+    """compile 前移除旧的自动延伸阅读块，避免重复堆积。"""
+    return re.sub(
+        r"\n*### 相关旧笔记 / 延伸阅读\n.*?(?=\n## |\n### |\Z)",
+        "",
+        text,
+        flags=re.S,
+    ).strip()
+
+
+def load_link_suggestions(note_path, max_body=5, max_related=5):
+    """调用 search_vault 的 Wiki-aware 候选链接。失败时静默跳过。"""
+    try:
+        from search_vault import suggest_links
+        data = suggest_links(note_path, scope="core", limit=24, include_wiki=True)
+    except Exception:
+        return {"body_links": [], "related_links": []}
+
+    def trim(items, limit):
+        trimmed = []
+        seen = set()
+        for item in items:
+            title = item.get("title", "").strip()
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            trimmed.append(item)
+            if len(trimmed) >= limit:
+                break
+        return trimmed
+
+    return {
+        "body_links": trim(data.get("body_links", []), max_body),
+        "related_links": trim(data.get("related_links", []), max_related),
+    }
+
+
+def has_wikilink(text, title):
+    pattern = re.compile(r"\[\[" + re.escape(title) + r"(?:\|[^\]]+)?\]\]")
+    return bool(pattern.search(text))
+
+
+def link_first_plain_mention(text, title):
+    """只链接首次纯文本出现，跳过已经在 wikilink 内的内容。"""
+    if not title or has_wikilink(text, title):
+        return text, False
+
+    pattern = re.compile(re.escape(title))
+    for match in pattern.finditer(text):
+        start, end = match.span()
+        before = text[max(0, start - 2):start]
+        after = text[end:end + 2]
+        if before == "[[" or after == "]]":
+            continue
+        return text[:start] + f"[[{title}]]" + text[end:], True
+    return text, False
+
+
+def autolink_sections(understanding, connections, suggestions):
+    """少而准地给正文插入强相关链接。"""
+    linked = []
+    understanding = normalize_understanding_section(understanding)
+    connections = strip_extension_links(normalize_connection_section(connections))
+
+    for item in suggestions.get("body_links", []):
+        title = item.get("title", "").strip()
+        if not title:
+            continue
+        new_understanding, changed = link_first_plain_mention(understanding, title)
+        if changed:
+            understanding = new_understanding
+            linked.append(title)
+            continue
+        new_connections, changed = link_first_plain_mention(connections, title)
+        if changed:
+            connections = new_connections
+            linked.append(title)
+
+    return understanding, connections, linked
+
+
+def append_related_links(connections, suggestions, linked_titles=None):
+    """把弱相关/启发性链接放到延伸阅读块，保留关系说明。"""
+    linked_titles = set(linked_titles or [])
+    related_items = []
+    existing = connections
+    for item in suggestions.get("related_links", []):
+        title = item.get("title", "").strip()
+        if not title or title in linked_titles or has_wikilink(existing, title):
+            continue
+        reason = item.get("reason", "").strip()
+        related_items.append((title, reason))
+        if len(related_items) >= 5:
+            break
+
+    if not related_items:
+        return connections
+
+    block_lines = ["### 相关旧笔记 / 延伸阅读"]
+    for title, reason in related_items:
+        suffix = f" — {reason}" if reason else ""
+        block_lines.append(f"- [[{title}]]{suffix}")
+
+    if connections.strip():
+        return connections.rstrip() + "\n\n" + "\n".join(block_lines)
+    return "\n".join(block_lines)
+
+
+def compile_note_content(content, suggestions=None):
     """把已有笔记重新编译成稳定的 Obsidian 三段式。"""
     frontmatter, body = extract_frontmatter(content)
     sections = extract_sections(body)
@@ -227,6 +342,12 @@ def compile_note_content(content):
     parts = []
     if frontmatter:
         parts.append(frontmatter)
+
+    if suggestions:
+        understanding, connections, linked_titles = autolink_sections(
+            understanding, connections, suggestions
+        )
+        connections = append_related_links(connections, suggestions, linked_titles)
 
     parts.append("## 📖 引用原文\n" + normalize_quote_text(quote))
     parts.append("## 💭 我的理解\n" + normalize_understanding_section(understanding))
@@ -487,13 +608,20 @@ def compile_note(args):
         content = f.read()
     mtime = os.path.getmtime(filepath)
 
-    compiled = compile_note_content(content)
+    suggestions = load_link_suggestions(filepath)
+    compiled = compile_note_content(content, suggestions=suggestions)
     result = safe_write(filepath, compiled, check_mtime=mtime)
     if not result["ok"]:
         print(json.dumps(result, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
 
-    print(json.dumps({"ok": True, "status": "compiled", "path": filepath}, ensure_ascii=False))
+    print(json.dumps({
+        "ok": True,
+        "status": "compiled",
+        "path": filepath,
+        "body_links": [item.get("title") for item in suggestions.get("body_links", [])],
+        "related_links": [item.get("title") for item in suggestions.get("related_links", [])],
+    }, ensure_ascii=False))
 
 
 def main():

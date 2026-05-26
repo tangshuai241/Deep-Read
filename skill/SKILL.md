@@ -31,7 +31,7 @@ description: >
 | `extract_epub.py` | EPUB 解析 → 章节/小节结构化 JSON |
 | `state.py` | 状态管理（show/set/reset/history） |
 | `write_note.py` | 笔记写入（create/update/append/finalize/compile） |
-| `search_vault.py` | Obsidian vault 搜索 |
+| `search_vault.py` | Obsidian vault 搜索；支持 core/Wiki 混合检索和候选双链 |
 
 **所有脚本命令都必须在上述目录下执行**（或用绝对路径）。
 
@@ -65,14 +65,15 @@ description: >
 - 详见 `references/dialogue-flow.md`
 
 ### 阶段 3：强制联想
-- 先运行 `search_vault.py --keyword "核心概念"` 搜旧笔记
+- 先运行 `search_vault.py --query "当前概念 + 用户回答 + 章节摘要" --mode hybrid --scope core --include-wiki` 搜旧笔记、概念卡、我的思考和 Wiki 枢纽
+- 优先引用高质量候选：核心机制、具体表现、应对方法、个人经验；不要因为关键词没命中就说没找到
 - 引用具体旧笔记 + 生活联想
 - → 每有联想，运行 `write_note.py append --section 让我想到`
 - 详见 `references/dialogue-flow.md`
 
 ### 阶段 4：收尾
 - 运行 `write_note.py finalize` 补全 frontmatter
-- 随后运行 `write_note.py compile` 重新整理整篇笔记，保证 Obsidian 三段式成品格式
+- 随后运行 `write_note.py compile` 重新整理整篇笔记，自动进行少而准的正文双链和延伸链接整理，保证 Obsidian 三段式成品格式
 - 更新 `reading-notes.md`
 - 每完成一章：更新认知画像
 - 详见 `references/dialogue-flow.md`
@@ -109,11 +110,14 @@ description: >
 
 ## 与 LLM-Wiki 集成
 
-当用户说 `/卡片` 或阶段4收尾时（自动触发）：
+当用户说 `/卡片` 或阶段4收尾时：
 1. 读 `📚 LLM-Wiki 整合/SCHEMA.md` 确认规范
-2. 扫描新笔记，匹配已有概念枢纽
-3. 概念跨 2+ 本书或满足阈值 → 提议创建/更新 concepts/ 页
-4. 更新 index.md 和 log.md
+2. 把 LLM-Wiki 作为“链接裁判 + 概念路由层”：先定位概念枢纽，再扩展到读书笔记、概念卡和我的思考
+3. 最终笔记采用少而准链接：正文 3-8 个强相关链接；弱相关放“相关旧笔记 / 延伸阅读”
+4. 扫描新笔记，匹配已有概念枢纽
+5. 概念跨 2+ 本书或满足阈值 → 只生成创建/更新 concepts/ 页建议
+6. DeepRead 不直接执行 Wiki 更新；真正更新仍交给独立的 LLM-Wiki 维护流程（如“更新知识库/整理知识库”）
+7. 更新 index.md 和 log.md 必须先列计划，不静默修改
 
 ## 语言风格
 

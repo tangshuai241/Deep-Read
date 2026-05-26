@@ -51,10 +51,11 @@
 **目标**：将新知识嵌入已有知识网络。
 
 **先搜后问**：
-1. 运行 `search_vault.py --keyword "核心概念"` 搜索 vault
-2. 引用具体旧笔记："你在《XXX》的「YYY」里写过：'……'。这和现在这段内容有什么关系？"
-3. 生活联想："用你本周的真实经历，重新解读这个道理"
-4. 没搜到旧笔记："没找到相关旧笔记，你自己能联想到什么？"
+1. 运行 `search_vault.py --query "当前概念 + 用户回答 + 章节摘要" --mode hybrid --scope core --include-wiki` 搜索核心知识库和 LLM-Wiki
+2. 先看 Wiki 枢纽和概念卡，再看读书笔记和“我的思考”，按“核心机制/具体表现/应对方法/个人经验”挑 1-3 个高质量候选
+3. 引用具体旧笔记："你在《XXX》的「YYY」里写过：'……'。这和现在这段内容有什么关系？"
+4. 生活联想："用你本周的真实经历，重新解读这个道理"
+5. 如果关键词未命中但语义相关，仍要使用候选；只有混合检索也无结果时，才说"没找到相关旧笔记，你自己能联想到什么？"
 
 **→ 每有 1 条有价值的联想**：运行 `write_note.py append --section 让我想到`
 更新状态到 `associate` → 问："联想差不多了，要收尾还是继续？"
@@ -62,9 +63,10 @@
 ## 阶段 4：收尾
 
 1. 运行 `write_note.py finalize` 补全 frontmatter + 待探索
-2. 运行 `write_note.py compile` 整理整篇笔记为 Obsidian 三段式成品
-3. 自动触发 LLM-Wiki 增量编译（不询问）
-4. 更新 reading-notes.md：进度、待探索问题
-5. 每完成一章：更新认知画像
-6. 告知用户笔记路径
-7. 更新状态到 `idle`
+2. 运行 `search_vault.py --suggest-links --note-path ... --scope core --include-wiki` 查看候选链接
+3. 运行 `write_note.py compile` 整理整篇笔记为 Obsidian 三段式成品，并自动插入少而准的正文链接和延伸链接
+4. 生成 LLM-Wiki 增量编译建议（不静默改 Wiki；DeepRead 不直接执行 Wiki 更新，真正更新交给独立 Wiki 维护流程）
+5. 更新 reading-notes.md：进度、待探索问题
+6. 每完成一章：更新认知画像
+7. 告知用户笔记路径
+8. 更新状态到 `idle`

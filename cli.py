@@ -134,7 +134,14 @@ def cmd_think():
 
 
 def cmd_search(keyword):
-    stdout, stderr, rc = run_script("search_vault.py", "--keyword", keyword, "--limit", "10")
+    stdout, stderr, rc = run_script(
+        "search_vault.py",
+        "--query", keyword,
+        "--mode", "hybrid",
+        "--scope", "core",
+        "--include-wiki",
+        "--limit", "10",
+    )
     if rc != 0:
         print(stderr, file=sys.stderr)
         return

@@ -231,8 +231,19 @@ def execute_tool(name, params):
                 args.extend([flag, str(p[key])])
         return run_script("state.py", "set", *args) if args else json.dumps({"ok": True})
     elif name == "search_vault":
-        return run_script("search_vault.py", "--keyword", str(p.get("keyword", "")),
-                          "--json", "--limit", str(p.get("limit", 10)))
+        args = ["--json", "--limit", str(p.get("limit", 10))]
+        scope = str(p.get("scope", "core") or "core")
+        mode = str(p.get("mode", "hybrid") or "hybrid")
+        if p.get("suggest_links"):
+            args.extend(["--suggest-links", "--scope", scope])
+            if p.get("note_path"):
+                args.extend(["--note-path", str(p.get("note_path"))])
+        else:
+            query = p.get("query") or p.get("keyword") or ""
+            args.extend(["--query", str(query), "--mode", mode, "--scope", scope])
+        if p.get("include_wiki", True):
+            args.append("--include-wiki")
+        return run_script("search_vault.py", *args)
     return json.dumps({"ok": False, "error": f"未知工具: {name}"})
 
 
@@ -292,14 +303,20 @@ TOOLS_ANTHROPIC = [
     },
     {
         "name": "search_vault",
-        "description": "搜索 Obsidian 知识库找关联旧笔记。阶段3（联想）时使用。",
+        "description": "搜索 Obsidian 核心知识库找关联旧笔记/概念/Wiki 枢纽。阶段3联想和阶段4收尾前使用，默认 core+Wiki 混合检索。",
         "input_schema": {
             "type": "object",
             "properties": {
-                "keyword": {"type": "string", "description": "搜索关键词"},
+                "keyword": {"type": "string", "description": "兼容旧参数：搜索关键词"},
+                "query": {"type": "string", "description": "推荐：用当前概念、用户回答、章节摘要组成的完整查询"},
+                "mode": {"type": "string", "enum": ["keyword", "hybrid"], "description": "默认 hybrid"},
+                "scope": {"type": "string", "enum": ["notes", "core", "wiki", "all"], "description": "默认 core"},
+                "include_wiki": {"type": "boolean", "description": "默认 true"},
+                "suggest_links": {"type": "boolean", "description": "为整篇笔记生成正文链接/延伸链接候选"},
+                "note_path": {"type": "string", "description": "suggest_links=true 时必填"},
                 "limit": {"type": "integer", "description": "返回数量，默认10"}
             },
-            "required": ["keyword"]
+            "required": []
         }
     }
 ]
