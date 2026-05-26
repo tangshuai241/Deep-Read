@@ -2,60 +2,118 @@
 {% block content %}
 <h1>会话记录</h1>
 
-<div class="tabs">
-  <button class="tab active" onclick="showTab('agent')">飞书/终端 Agent ({{ agent_sessions|length }})</button>
-  <button class="tab" onclick="showTab('claude')">Claude Code ({{ claude_sessions|length }})</button>
+<div class="filter-bar">
+  <input type="text" id="searchInput" placeholder="搜索：书名、章节、关键词..." oninput="doFilter()">
+  <select id="sourceFilter" onchange="doFilter()">
+    <option value="all">全部来源</option>
+    <option value="agent">飞书/终端 Agent</option>
+    <option value="claude">Claude Code</option>
+    <option value="notes">有笔记</option>
+    <option value="errors">有错误</option>
+  </select>
+  <span class="filter-count" id="resultCount"></span>
 </div>
 
-<div id="tab-agent" class="tab-content">
-<div class="list">
+<div class="session-list" id="sessionList">
 {% for s in agent_sessions %}
-  <a href="/sessions/{{ s.id }}" class="list-item">
-    <span class="item-main">{{ s.book or "未命名" }} {{ s.chapter }}</span>
-    <span class="item-meta">{{ s.provider }}/{{ s.model }}</span>
-    <span class="item-meta">{{ s.msg_count }} 轮</span>
-    <span class="item-meta-user">{{ s.user_id }}</span>
-    <span class="item-meta">{{ s.updated[:16] }}</span>
+<div class="session-row {{ 'has-notes' if s.has_notes }} {{ 'has-errors' if s.has_errors }}"
+     data-source="agent"
+     data-notes="{{ 1 if s.has_notes else 0 }}"
+     data-errors="{{ 1 if s.has_errors else 0 }}"
+     data-search="{{ s.title.lower() }} {{ s.book.lower() }} {{ s.chapter.lower() }}">
+  <a href="/sessions/{{ s.id }}" class="session-link">
+    <div class="session-main">
+      <span class="session-title">{{ s.title }}</span>
+      <span class="session-badges">
+        {% if s.completed %}<span class="badge ok">已完成</span>{% endif %}
+        {% if s.has_notes %}<span class="badge info">有笔记</span>{% endif %}
+        {% if s.has_errors %}<span class="badge warn">有错误</span>{% endif %}
+      </span>
+    </div>
+    <div class="session-sub">
+      <span class="sub-source">{{ s.provider }}/{{ s.model }}</span>
+      <span class="sub-counts">用户 {{ s.user_count }} · AI {{ s.ai_count }} · 工具 {{ s.tool_count }}</span>
+      <span class="sub-time">{{ s.updated[:16] }}</span>
+    </div>
   </a>
-{% endfor %}
-{% if not agent_sessions %}
-  <p class="empty">暂无飞书/终端会话</p>
-{% endif %}
 </div>
+{% endfor %}
+
+{% for s in claude_sessions %}
+<div class="session-row claude-row"
+     data-source="claude"
+     data-notes="0" data-errors="0"
+     data-search="{{ s.title.lower() }} {{ s.proj.lower() }}">
+  <div class="session-link" style="cursor:default">
+    <div class="session-main">
+      <span class="session-title">{{ s.title }}</span>
+      <span class="session-badges">
+        <span class="badge dim">Claude Code</span>
+      </span>
+    </div>
+    <div class="session-sub">
+      <span class="sub-source">{{ s.proj }}</span>
+      <span class="sub-counts">{{ s.msg_count }} 行</span>
+      <span class="sub-time">{{ s.updated[:16] }}</span>
+    </div>
+  </div>
+</div>
+{% endfor %}
 </div>
 
-<div id="tab-claude" class="tab-content" style="display:none">
-<div class="list">
-{% for s in claude_sessions %}
-  <div class="list-item claude-item">
-    <span class="item-main">{{ s.content_preview or "(空)" }}</span>
-    <span class="item-meta">Claude Code</span>
-    <span class="item-meta">{{ s.msg_count }} 条</span>
-    <span class="item-meta-source">项目: {{ s.proj }}</span>
-    <span class="item-meta">{{ s.updated[:16] }}</span>
-  </div>
-{% endfor %}
-{% if not claude_sessions %}
-  <p class="empty">暂无 Claude Code 会话</p>
-{% endif %}
-</div>
+<div class="session-summary">
+  Agent: {{ agent_sessions|length }} 条 | Claude Code (DeepRead相关): {{ claude_sessions|length }} 条
+  {% if claude_sessions|length == 0 %}
+  <br><small>Claude Code 会话已按 DeepRead 关键词筛选，排除无关记录</small>
+  {% endif %}
 </div>
 
 <script>
-function showTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
-  document.querySelector(`.tab:nth-child(${name === 'agent' ? '1' : '2'})`).classList.add('active');
-  document.getElementById('tab-' + name).style.display = 'block';
+function doFilter() {
+  const search = document.getElementById('searchInput').value.toLowerCase();
+  const source = document.getElementById('sourceFilter').value;
+  const rows = document.querySelectorAll('.session-row');
+  let count = 0;
+  rows.forEach(row => {
+    let show = true;
+    if (search && !row.dataset.search.includes(search)) show = false;
+    if (source === 'agent' && row.dataset.source !== 'agent') show = false;
+    if (source === 'claude' && row.dataset.source !== 'claude') show = false;
+    if (source === 'notes' && row.dataset.notes !== '1') show = false;
+    if (source === 'errors' && row.dataset.errors !== '1') show = false;
+    row.style.display = show ? '' : 'none';
+    if (show) count++;
+  });
+  document.getElementById('resultCount').textContent = count + ' 条';
 }
+doFilter();
 </script>
 
 <style>
-.tabs { display: flex; gap: 4px; margin-bottom: 16px; }
-.tab { padding: 6px 16px; border: none; border-radius: 6px; background: #e8e8f0; font-size: 14px; cursor: pointer; }
-.tab.active { background: #4a6fa5; color: #fff; }
-.tab-content { }
-.claude-item { opacity: 0.75; }
-.item-meta-source { color: #ff9800; font-size: 13px; }
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
+.filter-bar input { flex: 1; padding: 6px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+.filter-bar select { padding: 6px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+.filter-count { color: #888; font-size: 13px; white-space: nowrap; }
+
+.session-list { display: flex; flex-direction: column; gap: 2px; }
+.session-row { background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.session-row:hover { background: #f8f8ff; }
+.session-row.claude-row { opacity: 0.65; }
+.session-row.has-notes { border-left: 3px solid #4caf50; }
+.session-row.has-errors { border-left: 3px solid #ff9800; }
+.session-link { display: block; padding: 10px 16px; text-decoration: none; color: inherit; }
+.session-main { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.session-title { font-weight: 600; font-size: 14px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-badges { display: flex; gap: 4px; flex-shrink: 0; }
+.badge { padding: 1px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.badge.ok { background: #e8f5e9; color: #2e7d32; }
+.badge.info { background: #e3f2fd; color: #1565c0; }
+.badge.warn { background: #fff3e0; color: #e65100; }
+.badge.dim { background: #f0f0f0; color: #888; }
+.session-sub { display: flex; gap: 12px; font-size: 12px; color: #888; }
+.sub-source { color: #4a6fa5; }
+.sub-counts { color: #999; }
+.sub-time { margin-left: auto; }
+.session-summary { margin-top: 12px; color: #888; font-size: 13px; }
 </style>
 {% endblock %}

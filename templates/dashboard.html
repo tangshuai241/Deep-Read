@@ -31,9 +31,9 @@
 <div class="list">
 {% for s in sessions %}
   <a href="/sessions/{{ s.id }}" class="list-item">
-    <span class="item-main">{{ s.book or "未命名" }} {{ s.chapter }}</span>
+    <span class="item-main">{{ s.title }}</span>
     <span class="item-meta">{{ s.provider }}/{{ s.model }}</span>
-    <span class="item-meta">{{ s.msg_count }} 轮</span>
+    <span class="item-meta">用户{{ s.user_count }}·AI{{ s.ai_count }}</span>
     <span class="item-meta">{{ s.updated[:16] }}</span>
   </a>
 {% endfor %}

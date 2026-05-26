@@ -75,6 +75,10 @@ def list_notes(base_dir):
             })
     return sorted(notes, key=lambda x: x["mtime"], reverse=True)
 
+DEEPREAD_KW = ["精读", "读《", "深度阅读", "deepread", "deep-read", "费曼", "苏格拉底",
+               "write_note", "extract_epub", "state.py", "思考快与慢",
+               "Obsidian", "obsidian", "知识库", "读书笔记"]
+
 def list_sessions():
     sess = []
     if not SESSIONS_DIR.exists(): return sess
@@ -82,53 +86,86 @@ def list_sessions():
         try:
             with open(f, encoding="utf-8") as fh:
                 d = json.load(fh)
+            msgs = d.get("messages", [])
+            users = sum(1 for m in msgs if m.get("role") == "user")
+            assistants = sum(1 for m in msgs if m.get("role") == "assistant")
+            tools = sum(1 for m in msgs if m.get("role") == "tool")
+            # 标题：book + chapter，或第一条用户消息
+            book = d.get("book", "") or ""
+            ch = d.get("chapter", "") or ""
+            title = f"{book} {ch}".strip() if (book or ch) else ""
+            if not title:
+                for m in msgs:
+                    if m.get("role") == "user" and isinstance(m.get("content"), str):
+                        title = m["content"][:60]; break
+            # 状态
+            has_notes = any("write_note" in str(m) for m in msgs)
+            has_errors = any(
+                m.get("role") == "tool" and
+                ('"ok": false' in str(m.get("content","")) or
+                 'error_code' in str(m.get("content","")) or
+                 'API 错误' in str(m))
+                for m in msgs)
+            completed = d.get("current", {}).get("stage") == "idle"
+            notes_dir = str(f.stem)
             sess.append({
-                "id": f.stem, "book": d.get("book", ""), "chapter": d.get("chapter", ""),
+                "id": f.stem, "title": title or "(未命名)",
+                "book": book, "chapter": ch,
                 "provider": d.get("provider", ""), "model": d.get("model", ""),
-                "user_id": d.get("user_id", ""), "updated": d.get("updated_at", ""),
-                "msg_count": len(d.get("messages", [])), "source": "agent"
+                "user_count": users, "ai_count": assistants, "tool_count": tools,
+                "has_notes": has_notes, "has_errors": has_errors, "completed": completed,
+                "updated": d.get("updated_at", ""), "source": "agent"
             })
         except: pass
     return sess
 
 
 def list_claude_sessions():
-    """读取 Claude Code JSONL 会话"""
+    """读取 Claude Code JSONL，仅筛选 DeepRead 相关"""
     cc_dir = Path.home() / ".claude" / "projects"
     if not cc_dir.exists(): return []
-    sess = []
+    all_sess = []
     for proj_dir in sorted(cc_dir.iterdir()):
         if not proj_dir.is_dir(): continue
         for f in sorted(proj_dir.glob("*.jsonl"), key=os.path.getmtime, reverse=True):
             try:
                 lines = open(f, encoding="utf-8").readlines()
-                if not lines: continue
-                first = json.loads(lines[0])
-                # 找第一条有内容的 queue-operation
-                content = ""
-                for line in lines[:100]:
+                if not lines or len(lines) < 3: continue
+                # 收集所有内容，判断是否 DeepRead 相关
+                all_text = ""
+                first_content = ""
+                for line in lines:
                     d = json.loads(line)
-                    if d.get("type") == "queue-operation" and d.get("content"):
-                        content = str(d["content"])[:80]
-                        break
+                    c = str(d.get("content", "")).strip()
+                    all_text += c + " "
+                    if not first_content and c and len(c) > 10:
+                        if any(skip in c for skip in ("<task-", "system-reminder", "</task", "<current_note")):
+                            continue
+                        first_content = c
+                if not first_content:
+                    first_content = f"(Claude Code · {proj_dir.name[:30]})"
+                # 清理 XML 标签
+                first_content = re.sub(r'<[^>]+>', '', first_content).strip()[:80]
+                all_text_lower = all_text.lower()
+                # 筛选：包含 DeepRead 关键词，或项目路径匹配
+                is_dr = any(kw.lower() in all_text_lower for kw in DEEPREAD_KW)
+                is_dr = is_dr or any(kw.lower() in proj_dir.name.lower() for kw in ["deepread", "ӣ", "燕矶", "Claude Code 项目"])
+                if not is_dr: continue
                 mtime = os.path.getmtime(f)
                 ts = datetime.fromtimestamp(mtime).isoformat()
-                sess.append({
-                    "id": f.stem[:16],
-                    "sid_full": f.stem,
-                    "proj": proj_dir.name,
-                    "book": "",
-                    "chapter": "",
-                    "provider": "claude",
-                    "model": "Claude Code",
-                    "user_id": "claude-code",
-                    "updated": ts,
-                    "msg_count": len(lines),
-                    "source": "claude",
-                    "content_preview": content
+                title = first_content[:80] if first_content else "(空)"
+                all_sess.append({
+                    "id": f.stem[:16], "sid_full": f.stem,
+                    "proj": proj_dir.name, "title": title,
+                    "provider": "claude", "model": "Claude Code",
+                    "user_count": len([l for l in lines if '"content"' in l]),
+                    "ai_count": 0, "tool_count": 0,
+                    "has_notes": False, "has_errors": False, "completed": False,
+                    "updated": ts, "source": "claude",
+                    "msg_count": len(lines)
                 })
             except: pass
-    return sorted(sess, key=lambda x: x["updated"], reverse=True)
+    return sorted(all_sess, key=lambda x: x["updated"], reverse=True)
 
 def load_session(sid):
     p = SESSIONS_DIR / f"{sid}.json"
