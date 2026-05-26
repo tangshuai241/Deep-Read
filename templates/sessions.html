@@ -2,8 +2,14 @@
 {% block content %}
 <h1>会话记录</h1>
 
+<div class="tabs">
+  <button class="tab active" onclick="showTab('agent')">飞书/终端 Agent ({{ agent_sessions|length }})</button>
+  <button class="tab" onclick="showTab('claude')">Claude Code ({{ claude_sessions|length }})</button>
+</div>
+
+<div id="tab-agent" class="tab-content">
 <div class="list">
-{% for s in sessions %}
+{% for s in agent_sessions %}
   <a href="/sessions/{{ s.id }}" class="list-item">
     <span class="item-main">{{ s.book or "未命名" }} {{ s.chapter }}</span>
     <span class="item-meta">{{ s.provider }}/{{ s.model }}</span>
@@ -12,8 +18,44 @@
     <span class="item-meta">{{ s.updated[:16] }}</span>
   </a>
 {% endfor %}
-{% if not sessions %}
-  <p class="empty">暂无会话记录</p>
+{% if not agent_sessions %}
+  <p class="empty">暂无飞书/终端会话</p>
 {% endif %}
 </div>
+</div>
+
+<div id="tab-claude" class="tab-content" style="display:none">
+<div class="list">
+{% for s in claude_sessions %}
+  <div class="list-item claude-item">
+    <span class="item-main">{{ s.content_preview or "(空)" }}</span>
+    <span class="item-meta">Claude Code</span>
+    <span class="item-meta">{{ s.msg_count }} 条</span>
+    <span class="item-meta-source">项目: {{ s.proj }}</span>
+    <span class="item-meta">{{ s.updated[:16] }}</span>
+  </div>
+{% endfor %}
+{% if not claude_sessions %}
+  <p class="empty">暂无 Claude Code 会话</p>
+{% endif %}
+</div>
+</div>
+
+<script>
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+  document.querySelector(`.tab:nth-child(${name === 'agent' ? '1' : '2'})`).classList.add('active');
+  document.getElementById('tab-' + name).style.display = 'block';
+}
+</script>
+
+<style>
+.tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+.tab { padding: 6px 16px; border: none; border-radius: 6px; background: #e8e8f0; font-size: 14px; cursor: pointer; }
+.tab.active { background: #4a6fa5; color: #fff; }
+.tab-content { }
+.claude-item { opacity: 0.75; }
+.item-meta-source { color: #ff9800; font-size: 13px; }
+</style>
 {% endblock %}

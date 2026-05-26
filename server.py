@@ -86,10 +86,49 @@ def list_sessions():
                 "id": f.stem, "book": d.get("book", ""), "chapter": d.get("chapter", ""),
                 "provider": d.get("provider", ""), "model": d.get("model", ""),
                 "user_id": d.get("user_id", ""), "updated": d.get("updated_at", ""),
-                "msg_count": len(d.get("messages", []))
+                "msg_count": len(d.get("messages", [])), "source": "agent"
             })
         except: pass
     return sess
+
+
+def list_claude_sessions():
+    """读取 Claude Code JSONL 会话"""
+    cc_dir = Path.home() / ".claude" / "projects"
+    if not cc_dir.exists(): return []
+    sess = []
+    for proj_dir in sorted(cc_dir.iterdir()):
+        if not proj_dir.is_dir(): continue
+        for f in sorted(proj_dir.glob("*.jsonl"), key=os.path.getmtime, reverse=True):
+            try:
+                lines = open(f, encoding="utf-8").readlines()
+                if not lines: continue
+                first = json.loads(lines[0])
+                # 找第一条有内容的 queue-operation
+                content = ""
+                for line in lines[:100]:
+                    d = json.loads(line)
+                    if d.get("type") == "queue-operation" and d.get("content"):
+                        content = str(d["content"])[:80]
+                        break
+                mtime = os.path.getmtime(f)
+                ts = datetime.fromtimestamp(mtime).isoformat()
+                sess.append({
+                    "id": f.stem[:16],
+                    "sid_full": f.stem,
+                    "proj": proj_dir.name,
+                    "book": "",
+                    "chapter": "",
+                    "provider": "claude",
+                    "model": "Claude Code",
+                    "user_id": "claude-code",
+                    "updated": ts,
+                    "msg_count": len(lines),
+                    "source": "claude",
+                    "content_preview": content
+                })
+            except: pass
+    return sorted(sess, key=lambda x: x["updated"], reverse=True)
 
 def load_session(sid):
     p = SESSIONS_DIR / f"{sid}.json"
@@ -153,7 +192,8 @@ def compare_notes(left_path, right_path):
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
     state = load_state()
-    sessions = list_sessions()[:10]
+    sessions = list_sessions()[:5]
+    claude_count = len(list_claude_sessions())
     current = state.get("current", {})
     # 扁平化，避免 nested dict 导致 Jinja2 cache key 不可哈希
     s = {
@@ -165,13 +205,17 @@ def dashboard(request: Request):
     concepts = [str(c) for c in state.get("concepts_covered", [])]
     return render("dashboard.html", {
         "request": request, "state": s, "concepts": concepts,
-        "sessions": sessions
+        "sessions": sessions, "claude_count": claude_count
     })
 
 @app.get("/sessions", response_class=HTMLResponse)
 def sessions_page(request: Request):
+    agent_sessions = list_sessions()
+    claude_sessions = list_claude_sessions()
     return render("sessions.html", {
-        "request": request, "sessions": list_sessions()
+        "request": request,
+        "agent_sessions": agent_sessions,
+        "claude_sessions": claude_sessions
     })
 
 @app.get("/sessions/{sid}", response_class=HTMLResponse)
