@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>健康检查</h1>
+<button onclick="runDoctor()">重新检查</button>
+<pre id="output" class="doctor-output">点击按钮开始检查...</pre>
+
+<script>
+function runDoctor() {
+  document.getElementById('output').textContent = '检查中...';
+  fetch('/api/doctor').then(r => r.json()).then(d => {
+    document.getElementById('output').textContent = d.output || '无输出';
+  });
+}
+</script>
+{% endblock %}

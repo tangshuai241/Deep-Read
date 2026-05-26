@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>对比实验</h1>
+
+<div class="compare-setup">
+  <div class="dir-inputs">
+    <div>
+      <label>左：Claude Code 笔记目录</label>
+      <input type="text" id="leftDir" value="{{ left_dir or '' }}" placeholder="例如: E:\Documents\知识库\读书\笔记">
+    </div>
+    <div>
+      <label>右：飞书 Agent 笔记目录</label>
+      <input type="text" id="rightDir" value="{{ right_dir or '' }}" placeholder="例如: E:\Documents\知识库\读书\笔记-飞书对比">
+    </div>
+  </div>
+  <button onclick="loadDirs()">加载</button>
+</div>
+
+{% if left_notes and right_notes %}
+<div class="compare-list">
+  <div class="compare-column">
+    <h3>左侧 (Claude Code) — {{ left_notes|length }} 篇</h3>
+    {% for n in left_notes %}
+      <div class="compare-item" data-name="{{ n.name }}" data-path="{{ n.path }}" onclick="selectLeft(this)">{{ n.name }}</div>
+    {% endfor %}
+  </div>
+  <div class="compare-column">
+    <h3>右侧 (飞书 Agent) — {{ right_notes|length }} 篇</h3>
+    {% for n in right_notes %}
+      <div class="compare-item" data-name="{{ n.name }}" data-path="{{ n.path }}" onclick="selectRight(this)">{{ n.name }}</div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="compare-actions" style="display:none" id="diffActions">
+  <span id="selectedPair"></span>
+  <button onclick="runDiff()">对比差异</button>
+</div>
+
+<div id="diffResult" style="display:none">
+  <div class="cards" id="diffStats"></div>
+  <pre class="diff-view" id="diffContent"></pre>
+</div>
+{% endif %}
+
+<script>
+let selectedLeft = null;
+let selectedRight = null;
+
+function loadDirs() {
+  const l = document.getElementById('leftDir').value;
+  const r = document.getElementById('rightDir').value;
+  window.location = '/compare?left_dir=' + encodeURIComponent(l) + '&right_dir=' + encodeURIComponent(r);
+}
+
+function selectLeft(el) {
+  document.querySelectorAll('.compare-column:first-child .compare-item').forEach(e => e.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedLeft = {name: el.dataset.name, path: el.dataset.path};
+  checkPair();
+}
+
+function selectRight(el) {
+  document.querySelectorAll('.compare-column:last-child .compare-item').forEach(e => e.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedRight = {name: el.dataset.name, path: el.dataset.path};
+  checkPair();
+}
+
+function checkPair() {
+  if (selectedLeft && selectedRight) {
+    document.getElementById('diffActions').style.display = 'block';
+    document.getElementById('selectedPair').textContent =
+      `对比: ${selectedLeft.name} ↔ ${selectedRight.name}`;
+  }
+}
+
+function runDiff() {
+  fetch('/api/compare/diff', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({left: selectedLeft.path, right: selectedRight.path})
+  }).then(r => r.json()).then(d => {
+    if (!d.ok) { alert(d.error); return; }
+    const r = d.result;
+    document.getElementById('diffResult').style.display = 'block';
+    document.getElementById('diffStats').innerHTML =
+      `<div class="card"><h3>左侧</h3>
+        引用:${r.left_stats.quote_count} 字数:${r.left_stats.word_count} 内链:${r.left_stats.link_count}
+        fm:${r.left_stats.fm_complete ? '✓' : '✗'}
+       </div>
+       <div class="card"><h3>右侧</h3>
+        引用:${r.right_stats.quote_count} 字数:${r.right_stats.word_count} 内链:${r.right_stats.link_count}
+        fm:${r.right_stats.fm_complete ? '✓' : '✗'}
+       </div>`;
+    document.getElementById('diffContent').textContent = r.diff || '(无差异)';
+  });
+}
+</script>
+{% endblock %}

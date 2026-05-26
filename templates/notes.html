@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>笔记审阅</h1>
+
+<div class="dir-bar">
+  <input type="text" id="dirInput" value="{{ dir }}" placeholder="笔记目录路径" style="flex:1">
+  <button onclick="changeDir()">浏览</button>
+</div>
+
+<div class="list">
+{% for n in notes %}
+  <a href="/notes/view?path={{ n.path | urlencode }}" class="list-item">
+    <span class="item-main">{{ n.name }}</span>
+    <span class="item-meta">{{ n.book }}</span>
+    <span class="item-meta">{{ n.fm.get("章节", "") }}</span>
+    <span class="item-meta">{{ n.fm.get("书名", "") }}</span>
+  </a>
+{% endfor %}
+{% if not notes %}
+  <p class="empty">暂无笔记</p>
+{% endif %}
+</div>
+
+<script>
+function changeDir() {
+  const dir = document.getElementById('dirInput').value;
+  window.location = '/notes?dir=' + encodeURIComponent(dir);
+}
+</script>
+{% endblock %}

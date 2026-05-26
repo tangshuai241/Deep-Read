@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>仪表盘</h1>
+
+<div class="cards">
+  <div class="card">
+    <h3>阅读状态</h3>
+    <table>
+      <tr><td>书名</td><td>{{ state.get("book") or "—" }}</td></tr>
+      <tr><td>章节</td><td>{{ state.get("chapter") or "—" }}</td></tr>
+      <tr><td>阶段</td><td>{{ state.get("stage", "idle") }}</td></tr>
+      <tr><td>目标</td><td>{{ state.get("user_goal") or "—" }}</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>已覆盖概念</h3>
+    <p>{{ concepts|length }} 个</p>
+    <p class="tags">
+    {% for c in concepts[:10] %}
+      <span class="tag">{{ c }}</span>
+    {% endfor %}
+    {% if concepts|length > 10 %}
+      <span class="tag">+{{ concepts|length - 10 }}</span>
+    {% endif %}
+    </p>
+  </div>
+</div>
+
+<h2>最近会话</h2>
+<div class="list">
+{% for s in sessions %}
+  <a href="/sessions/{{ s.id }}" class="list-item">
+    <span class="item-main">{{ s.book or "未命名" }} {{ s.chapter }}</span>
+    <span class="item-meta">{{ s.provider }}/{{ s.model }}</span>
+    <span class="item-meta">{{ s.msg_count }} 轮</span>
+    <span class="item-meta">{{ s.updated[:16] }}</span>
+  </a>
+{% endfor %}
+{% if not sessions %}
+  <p class="empty">暂无会话</p>
+{% endif %}
+</div>
+{% endblock %}

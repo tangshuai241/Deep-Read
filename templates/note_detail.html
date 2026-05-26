@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<a href="/notes" class="back">← 返回</a>
+
+<div class="note-header">
+  <h1>{{ name }}</h1>
+  <div class="note-meta">
+    <span>📖 {{ stats.quote_count }} 引用</span>
+    <span>📝 {{ stats.word_count }} 字</span>
+    <span>🔗 {{ stats.link_count }} 内链</span>
+    {% if stats.fm_complete %}<span class="ok">✓ frontmatter 完整</span>{% else %}<span class="warn">⚠ frontmatter 不完整</span>{% endif %}
+  </div>
+</div>
+
+<div class="note-sections">
+{% for title, text in sections.items() %}
+  <div class="note-section">
+    <h3>{{ title }}</h3>
+    <div class="note-text">{{ text }}</div>
+  </div>
+{% endfor %}
+</div>
+
+<div class="actions">
+  <button onclick="compile()">📝 compile</button>
+  <button onclick="openFolder()">📂 打开文件夹</button>
+</div>
+
+<script>
+const notePath = {{ path | tojson }};
+function compile() {
+  fetch('/api/notes/compile', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: notePath})
+  }).then(r => r.json()).then(d => {
+    alert(d.ok ? 'compile 完成' : '失败: ' + (d.stderr || d.error));
+    if (d.ok) location.reload();
+  });
+}
+function openFolder() {
+  // 通过 API 打开文件夹（后端需实现，暂用复制路径替代）
+  navigator.clipboard.writeText(notePath.replace(/[^\\]+\.md$/, ''));
+  alert('文件夹路径已复制到剪贴板');
+}
+</script>
+{% endblock %}

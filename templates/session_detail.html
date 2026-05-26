@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+<a href="/sessions" class="back">← 返回</a>
+
+<h1>{{ session.get("book", "未命名") }} {{ session.get("chapter", "") }}</h1>
+<div class="session-meta">
+  {{ session.get("provider", "") }}/{{ session.get("model", "") }}
+  · {{ session.get("msg_count", 0) }} 轮
+  · {{ session.get("user_id", "") }}
+  · {{ session.get("updated_at", "")[:16] }}
+</div>
+
+<div class="chat">
+{% for msg in session.get("messages", []) %}
+  {% set role = msg.get("role", "") %}
+  {% if role == "user" %}
+    <div class="msg user">
+      <div class="msg-label">用户</div>
+      <div class="msg-text">{{ msg.get("content", "") }}</div>
+    </div>
+  {% elif role == "tool" %}
+    <details class="msg tool">
+      <summary class="msg-label">工具: {{ msg.get("name", "") }}</summary>
+      <pre class="msg-pre">{{ msg.get("content", "")[:600] }}</pre>
+    </details>
+  {% elif role == "assistant" %}
+    {% set content = msg.get("content", "") %}
+    {% if content is string %}
+      <div class="msg assistant">
+        <div class="msg-label">AI</div>
+        <div class="msg-text">{{ content }}</div>
+      </div>
+    {% elif content is iterable %}
+      {% for block in content %}
+        {% if block.get("type") == "text" %}
+          <div class="msg assistant">
+            <div class="msg-label">AI</div>
+            <div class="msg-text">{{ block.get("text", "") }}</div>
+          </div>
+        {% elif block.get("type") == "tool_use" %}
+          <div class="msg tool-use">
+            <span class="msg-label">调用工具: {{ block.get("name", "") }}</span>
+            <span class="item-meta">{{ block.get("input", {}) }}</span>
+          </div>
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+  {% endif %}
+{% endfor %}
+</div>
+{% endblock %}

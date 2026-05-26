@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>会话记录</h1>
+
+<div class="list">
+{% for s in sessions %}
+  <a href="/sessions/{{ s.id }}" class="list-item">
+    <span class="item-main">{{ s.book or "未命名" }} {{ s.chapter }}</span>
+    <span class="item-meta">{{ s.provider }}/{{ s.model }}</span>
+    <span class="item-meta">{{ s.msg_count }} 轮</span>
+    <span class="item-meta-user">{{ s.user_id }}</span>
+    <span class="item-meta">{{ s.updated[:16] }}</span>
+  </a>
+{% endfor %}
+{% if not sessions %}
+  <p class="empty">暂无会话记录</p>
+{% endif %}
+</div>
+{% endblock %}
