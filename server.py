@@ -229,20 +229,66 @@ def compare_notes(left_path, right_path):
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
     state = load_state()
-    sessions = list_sessions()[:5]
-    claude_count = len(list_claude_sessions())
     current = state.get("current", {})
-    # 扁平化，避免 nested dict 导致 Jinja2 cache key 不可哈希
-    s = {
-        "book": str(current.get("book") or ""),
+    concepts_all = [str(c) for c in state.get("concepts_covered", [])]
+
+    # 当前阅读任务（翻译成人话）
+    reading = {
+        "book": str(current.get("book") or "—"),
         "chapter": str(current.get("chapter") or ""),
+        "section": str(current.get("section") or ""),
         "stage": str(current.get("stage", "idle")),
         "goal": str(current.get("user_goal") or ""),
     }
-    concepts = [str(c) for c in state.get("concepts_covered", [])]
+    stage_map = {"idle": "空闲", "init": "初始化", "feynman": "费曼输出",
+                  "socratic": "苏格拉底追问", "associate": "联想", "wrapup": "收尾"}
+    reading["stage_cn"] = stage_map.get(reading["stage"], reading["stage"])
+    if reading["stage"] == "idle" and reading["chapter"]:
+        reading["next"] = f"继续第{reading['chapter']}章下一节，或复习本节笔记"
+    elif reading["stage"] == "idle":
+        reading["next"] = "开始精读一本书"
+    else:
+        reading["next"] = "继续对话"
+
+    # 知识积累
+    notes_dir = get_notes_dir()
+    book_notes = 0
+    if os.path.isdir(notes_dir):
+        book_dir = os.path.join(notes_dir, f"《{reading['book']}》")
+        if os.path.isdir(book_dir):
+            book_notes = len([f for f in os.listdir(book_dir) if f.endswith(".md")])
+    knowledge = {
+        "concepts": len(concepts_all),
+        "book_notes": book_notes,
+        "recent_5": concepts_all[-5:] if len(concepts_all) > 5 else concepts_all,
+    }
+
+    # 最近活动（过滤测试/寒暄）
+    all_sessions = list_sessions()
+    recent = []
+    for s in all_sessions:
+        title = s.get("title", "")
+        # 跳过测试/寒暄/空白
+        if any(skip in title for skip in ("你好", "hi", "model_check", "route_check", "测试", "test")):
+            continue
+        if s["user_count"] < 2 and not s["has_notes"]:
+            continue
+        recent.append(s)
+        if len(recent) >= 8:
+            break
+
+    # 系统状态
+    claude_count = len(list_claude_sessions())
+    system = {
+        "provider": os.environ.get("DEEPSEEK_API_KEY") and "DeepSeek" or "—",
+        "model": "deepseek-v4-pro",
+        "claude_sessions": claude_count,
+    }
+
     return render("dashboard.html", {
-        "request": request, "state": s, "concepts": concepts,
-        "sessions": sessions, "claude_count": claude_count
+        "request": request, "reading": reading, "knowledge": knowledge,
+        "recent": recent, "system": system,
+        "agent_count": len(all_sessions), "claude_count": claude_count
     })
 
 @app.get("/sessions", response_class=HTMLResponse)

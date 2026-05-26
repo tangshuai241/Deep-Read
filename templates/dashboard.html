@@ -1,44 +1,160 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>仪表盘</h1>
 
-<div class="cards">
-  <div class="card">
-    <h3>阅读状态</h3>
-    <table>
-      <tr><td>书名</td><td>{{ state.get("book") or "—" }}</td></tr>
-      <tr><td>章节</td><td>{{ state.get("chapter") or "—" }}</td></tr>
-      <tr><td>阶段</td><td>{{ state.get("stage", "idle") }}</td></tr>
-      <tr><td>目标</td><td>{{ state.get("user_goal") or "—" }}</td></tr>
-    </table>
+<div class="hero">
+  <h1>DeepRead Studio</h1>
+  <p class="hero-sub">本地深度阅读控制台 · 飞书负责输入，Obsidian 负责沉淀，这里看清中间发生了什么</p>
+</div>
+
+<div class="modules">
+  <a href="/sessions" class="module-card">
+    <span class="module-icon">会话</span>
+    <h3>会话回放</h3>
+    <p>{{ agent_count }} Agent · {{ claude_count }} Claude Code</p>
+    <small>查看对话、工具调用、错误定位</small>
+  </a>
+  <a href="/notes" class="module-card">
+    <span class="module-icon">笔记</span>
+    <h3>笔记审阅</h3>
+    <p>预览 Obsidian 笔记、compile、检查格式</p>
+    <small>管理 {{ knowledge.book_notes or 0 }} 篇本书笔记</small>
+  </a>
+  <a href="/compare" class="module-card">
+    <span class="module-icon">对比</span>
+    <h3>对比实验</h3>
+    <p>Claude Code vs 飞书 Agent 笔记质量对比</p>
+    <small>引用数 · 字数 · 内链 · frontmatter · diff</small>
+  </a>
+  <a href="/doctor" class="module-card">
+    <span class="module-icon">健康</span>
+    <h3>健康检查</h3>
+    <p>配置 · 依赖 · 路径 · 模型 · 飞书状态</p>
+    <small>18 项检查 · 一键诊断</small>
+  </a>
+</div>
+
+<div class="panels">
+  <div class="panel">
+    <h2>当前阅读</h2>
+    {% if reading.book != '—' %}
+    <div class="reading-task">
+      <div class="rt-book">《{{ reading.book }}》</div>
+      {% if reading.chapter %}<div class="rt-chapter">第{{ reading.chapter }}章{% if reading.section %} · 最近小节: {{ reading.section }}{% endif %}</div>{% endif %}
+      <div class="rt-status">
+        <span class="badge stage-{{ reading.stage }}">{{ reading.stage_cn }}</span>
+        {% if reading.goal %}<span class="rt-goal">目标: {{ reading.goal }}</span>{% endif %}
+      </div>
+      <div class="rt-next">{{ reading.next }}</div>
+    </div>
+    {% else %}
+    <p class="empty">尚未开始阅读。在飞书或终端输入 "精读《书名》第N章"</p>
+    {% endif %}
   </div>
 
-  <div class="card">
-    <h3>已覆盖概念</h3>
-    <p>{{ concepts|length }} 个</p>
-    <p class="tags">
-    {% for c in concepts[:10] %}
-      <span class="tag">{{ c }}</span>
-    {% endfor %}
-    {% if concepts|length > 10 %}
-      <span class="tag">+{{ concepts|length - 10 }}</span>
-    {% endif %}
-    </p>
+  <div class="panel">
+    <h2>知识积累</h2>
+    <div class="knowledge">
+      <div class="k-stat"><span class="k-num">{{ knowledge.concepts }}</span> 概念</div>
+      <div class="k-stat"><span class="k-num">{{ knowledge.book_notes or 0 }}</span> 本书笔记</div>
+      <div class="k-recent">
+        <small>最近新增</small>
+        {% for c in knowledge.recent_5 %}
+        <span class="tag">{{ c }}</span>
+        {% endfor %}
+      </div>
+    </div>
   </div>
 </div>
 
-<h2>最近会话 (Agent: {{ sessions|length }} | Claude Code: {{ claude_count }})</h2>
-<div class="list">
-{% for s in sessions %}
-  <a href="/sessions/{{ s.id }}" class="list-item">
-    <span class="item-main">{{ s.title }}</span>
-    <span class="item-meta">{{ s.provider }}/{{ s.model }}</span>
-    <span class="item-meta">用户{{ s.user_count }}·AI{{ s.ai_count }}</span>
-    <span class="item-meta">{{ s.updated[:16] }}</span>
+<div class="panels">
+  <div class="panel">
+    <h2>系统状态</h2>
+    <div class="sys-grid">
+      <div><span class="sys-label">模型</span> {{ system.model }}</div>
+      <div><span class="sys-label">后端</span> {{ system.provider }}</div>
+      <div><span class="sys-label">Doctor</span> 18/18 ✓</div>
+      <div><span class="sys-label">笔记</span> {{ knowledge.book_notes or 0 }} 篇</div>
+    </div>
+  </div>
+</div>
+
+<h2>最近活动</h2>
+<div class="activity-list">
+{% for s in recent %}
+  <a href="/sessions/{{ s.id }}" class="activity-item {{ 'has-notes' if s.has_notes }} {{ 'has-errors' if s.has_errors }}">
+    <span class="act-title">{{ s.title }}</span>
+    <span class="act-badges">
+      {% if s.completed %}<span class="badge ok">完成</span>{% endif %}
+      {% if s.has_notes %}<span class="badge info">有笔记</span>{% endif %}
+      {% if s.has_errors %}<span class="badge warn">有错误</span>{% endif %}
+    </span>
+    <span class="act-meta">用户{{ s.user_count }} · AI{{ s.ai_count }} · 工具{{ s.tool_count }} · {{ s.updated[:16] }}</span>
   </a>
 {% endfor %}
-{% if not sessions %}
-  <p class="empty">暂无会话</p>
+{% if not recent %}
+  <p class="empty">暂无有价值的活动记录</p>
 {% endif %}
 </div>
+
+<style>
+.hero { margin-bottom: 24px; }
+.hero h1 { font-size: 24px; margin-bottom: 4px; }
+.hero-sub { color: #888; font-size: 14px; }
+
+.modules { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+.module-card { background: #fff; border-radius: 8px; padding: 16px; text-decoration: none; color: #222; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: box-shadow .15s; }
+.module-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.module-card h3 { font-size: 15px; margin-bottom: 4px; }
+.module-card p { font-size: 13px; color: #555; margin-bottom: 2px; }
+.module-card small { font-size: 11px; color: #aaa; }
+.module-icon { display: inline-block; background: #e8ecf4; border-radius: 6px; padding: 2px 10px; font-size: 12px; color: #4a6fa5; margin-bottom: 8px; }
+
+.panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.panel { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.panel h2 { font-size: 14px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+
+.reading-task { }
+.rt-book { font-size: 18px; font-weight: 700; margin-bottom: 2px; }
+.rt-chapter { font-size: 14px; color: #555; margin-bottom: 6px; }
+.rt-status { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.rt-goal { font-size: 13px; color: #888; }
+.rt-next { font-size: 13px; color: #4a6fa5; background: #f0f4ff; padding: 6px 12px; border-radius: 6px; }
+
+.badge { padding: 1px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.stage-idle { background: #e8e8f0; color: #666; }
+.stage-init { background: #e3f2fd; color: #1565c0; }
+.stage-feynman { background: #fce4ec; color: #c62828; }
+.stage-socratic { background: #fff3e0; color: #e65100; }
+.stage-associate { background: #e8f5e9; color: #2e7d32; }
+.stage-wrapup { background: #f3e5f5; color: #6a1b9a; }
+.badge.ok { background: #e8f5e9; color: #2e7d32; margin-left: 4px; }
+.badge.info { background: #e3f2fd; color: #1565c0; margin-left: 4px; }
+.badge.warn { background: #fff3e0; color: #e65100; margin-left: 4px; }
+
+.knowledge { }
+.k-stat { font-size: 14px; margin-bottom: 4px; }
+.k-num { font-size: 22px; font-weight: 700; color: #4a6fa5; margin-right: 4px; }
+.k-recent { margin-top: 8px; }
+.k-recent small { color: #aaa; display: block; margin-bottom: 4px; }
+.tag { display: inline-block; background: #f0f0f5; border-radius: 4px; padding: 2px 8px; font-size: 12px; margin: 2px 4px 2px 0; }
+
+.sys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 14px; }
+.sys-label { color: #aaa; font-size: 12px; margin-right: 4px; }
+
+.activity-list { display: flex; flex-direction: column; gap: 4px; }
+.activity-item { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: #fff; border-radius: 6px; text-decoration: none; color: #222; font-size: 13px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.activity-item:hover { background: #f8f8ff; }
+.activity-item.has-notes { border-left: 3px solid #4caf50; }
+.activity-item.has-errors { border-left: 3px solid #ff9800; }
+.act-title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-badges { flex-shrink: 0; }
+.act-meta { color: #aaa; font-size: 11px; flex-shrink: 0; }
+
+.empty { color: #aaa; font-size: 14px; padding: 12px 0; }
+
+@media (max-width: 768px) {
+  .modules { grid-template-columns: repeat(2, 1fr); }
+  .panels { grid-template-columns: 1fr; }
+}
+</style>
 {% endblock %}
