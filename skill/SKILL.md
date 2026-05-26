@@ -30,7 +30,7 @@ description: >
 |------|------|
 | `extract_epub.py` | EPUB 解析 → 章节/小节结构化 JSON |
 | `state.py` | 状态管理（show/set/reset/history） |
-| `write_note.py` | 笔记写入（create/update/append/finalize） |
+| `write_note.py` | 笔记写入（create/update/append/finalize/compile） |
 | `search_vault.py` | Obsidian vault 搜索 |
 
 **所有脚本命令都必须在上述目录下执行**（或用绝对路径）。
@@ -72,6 +72,7 @@ description: >
 
 ### 阶段 4：收尾
 - 运行 `write_note.py finalize` 补全 frontmatter
+- 随后运行 `write_note.py compile` 重新整理整篇笔记，保证 Obsidian 三段式成品格式
 - 更新 `reading-notes.md`
 - 每完成一章：更新认知画像
 - 详见 `references/dialogue-flow.md`
@@ -100,6 +101,7 @@ description: >
 
 - **EPUB 解析**：始终用脚本，不要手搓 → `references/epub-parsing.md`
 - **笔记格式**：Obsidian 三段式 → `references/note-format.md`
+- **章节字段语义**：frontmatter 的 `章节` 固定为大章名（如 `7.字母"B"与数字"13"`），不要改成小节名；小节名放在文件名、正文标题或状态 `section`
 - **状态机**：每条消息前读状态，阶段切换时更新 → `references/fsm-spec.md`
 - **认知画像**：章节完成后更新，单次对话不触发 → `references/cognition-profile.md`
 - **微信读书**：可选增强，默认关闭 → `references/weread-api.md`

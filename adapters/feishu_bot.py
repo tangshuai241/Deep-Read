@@ -62,27 +62,38 @@ def is_duplicate(message_id):
     return False
 
 
-# ── 命令白名单 ──
-COMMAND_KEYWORDS = ["精读", "读《", "继续", "进入下一阶段", "跳过", "收尾",
-                     "复习", "进度", "慢思考", "搜索", "联想", "批判",
-                     "费曼", "苏格拉底", "/deepread", "/费曼", "/苏格拉底",
-                     "/联想", "/批判", "/复习", "/进度", "/慢思考", "/卡片",
-                     "深思", "/深思", "/thinking", "/think", "/reason",
-                     "普通", "快答", "/普通", "/快答", "/normal"]
-
-GREETINGS = {"你好", "hi", "hello", "在吗", "在不在", "嗨", "哈喽", "哈啰",
+# ── 轻量快捷回复 ──
+GREETINGS = {"你好", "你好啊", "hi", "hello", "在吗", "在不在", "嗨", "哈喽", "哈啰",
              "早上好", "下午好", "晚上好", "早", "好啊", "hey", "yo"}
+HELP_COMMANDS = {"帮助", "help", "/help", "菜单", "命令", "使用说明"}
+
+
+def normalize_user_text(text):
+    """修正常见口误/输入法误差，让自然表达也能进入阅读流程。"""
+    stripped = str(text or "").strip()
+    replacements = [
+        ("精度《", "精读《"),
+        ("精度 ", "精读 "),
+        ("精度", "精读"),
+    ]
+    for old, new in replacements:
+        if old in stripped:
+            stripped = stripped.replace(old, new, 1)
+    read_intents = ("现在进行", "开始进行", "开始学习", "进行", "学习")
+    if "第" in stripped and any(intent in stripped for intent in read_intents):
+        if not any(trigger in stripped for trigger in ("精读", "读《", "继续读", "/deepread")):
+            stripped = f"精读 {stripped}"
+    return stripped
 
 
 def match_command(text):
-    """匹配命令→返回 command_type 或 None"""
-    stripped = text.strip()
+    """只拦截无需 LLM 的轻量消息；其他自然语言全部交给 Agent。"""
+    stripped = normalize_user_text(text)
     if stripped.lower() in GREETINGS:
         return "greeting"
-    for kw in COMMAND_KEYWORDS:
-        if kw in stripped:
-            return "agent"
-    return None
+    if stripped.lower() in HELP_COMMANDS:
+        return "help"
+    return "agent"
 
 
 def quick_reply(text):
@@ -92,17 +103,19 @@ def quick_reply(text):
         return ("你好～我是 DeepRead 阅读教练。\n"
                 "你可以：\n"
                 "• 精读《书名》第N章\n"
+                "• 我想开始读第七章第三节\n"
                 "• 查看进度\n"
                 "• 复习 / 慢思考\n"
                 "• 搜索 关键词"), False
-    if cmd == "agent":
-        return None, True  # 需要走 Agent
-    # 未知命令
-    return ("支持的命令：\n"
-            "  精读《书名》第N章\n"
-            "  继续 / 1跳过\n"
-            "  查看进度 / 复习 / 慢思考\n"
-            "  搜索 关键词"), False
+    if cmd == "help":
+        return ("支持的说法：\n"
+                "  精读《书名》第N章\n"
+                "  我想开始读第七章第三节\n"
+                "  继续 / 跳过 / 收尾\n"
+                "  查看进度 / 复习 / 慢思考\n"
+                "  搜索 关键词\n"
+                "也可以直接回答我的问题，我会接着追问。"), False
+    return None, True  # 其他内容都走 Agent，保留上下文
 
 
 def get_agent_for_user(user_id):
@@ -119,6 +132,7 @@ def get_agent_for_user(user_id):
 def handle_message(text, user_id="default"):
     """处理一条消息，返回回复文本"""
     agent = get_agent_for_user(user_id)
+    text = normalize_user_text(text)
     response, _tools = agent.process_message(text)
     return response
 

@@ -78,3 +78,34 @@ def test_send_reply_can_fallback_to_user_id(monkeypatch):
 def test_thinking_commands_go_to_agent():
     assert feishu_bot.match_command("/深思 总结我的回答") == "agent"
     assert feishu_bot.match_command("/普通 你好") == "agent"
+
+
+def test_long_user_answer_goes_to_agent():
+    text = "其实我觉得它消除的还是特质之间的关联，第一题和第二题所考察的重点不一样。"
+    qr, need_agent = feishu_bot.quick_reply(text)
+
+    assert qr is None
+    assert need_agent is True
+
+
+def test_natural_reading_request_goes_to_agent():
+    assert feishu_bot.normalize_user_text("现在进行第七章第三节的学习") == "精读 现在进行第七章第三节的学习"
+    qr, need_agent = feishu_bot.quick_reply("现在进行第七章第三节的学习")
+
+    assert qr is None
+    assert need_agent is True
+
+
+def test_common_typo_is_normalized():
+    assert feishu_bot.normalize_user_text("精度《思考快与慢》第七章") == "精读《思考快与慢》第七章"
+    qr, need_agent = feishu_bot.quick_reply("精度《思考快与慢》第七章第三节")
+
+    assert qr is None
+    assert need_agent is True
+
+
+def test_unknown_short_text_goes_to_agent():
+    qr, need_agent = feishu_bot.quick_reply("精度")
+
+    assert qr is None
+    assert need_agent is True

@@ -259,7 +259,7 @@ TOOLS_ANTHROPIC = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["create", "update", "append", "finalize"]},
+                "action": {"type": "string", "enum": ["create", "update", "append", "finalize", "compile"]},
                 "book": {"type": "string"}, "concept": {"type": "string"},
                 "chapter": {"type": "string"}, "author": {"type": "string"},
                 "category": {"type": "string"}, "tags": {"type": "string"},

@@ -62,8 +62,9 @@
 ## 阶段 4：收尾
 
 1. 运行 `write_note.py finalize` 补全 frontmatter + 待探索
-2. 自动触发 LLM-Wiki 增量编译（不询问）
-3. 更新 reading-notes.md：进度、待探索问题
-4. 每完成一章：更新认知画像
-5. 告知用户笔记路径
-6. 更新状态到 `idle`
+2. 运行 `write_note.py compile` 整理整篇笔记为 Obsidian 三段式成品
+3. 自动触发 LLM-Wiki 增量编译（不询问）
+4. 更新 reading-notes.md：进度、待探索问题
+5. 每完成一章：更新认知画像
+6. 告知用户笔记路径
+7. 更新状态到 `idle`

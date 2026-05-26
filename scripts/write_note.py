@@ -99,6 +99,148 @@ def slugify(title):
     return safe.strip()[:80]
 
 
+def decode_escaped_newlines(text):
+    """把 LLM/tool 参数里的字面量 \\n 转成真实换行。"""
+    if text is None:
+        return ""
+    text = str(text)
+    return text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+
+
+def clean_note_text(text):
+    """通用正文清洗：修正换行并压缩过度空白。"""
+    text = decode_escaped_newlines(text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{4,}", "\n\n\n", text)
+    return text.strip()
+
+
+def normalize_quote_text(text):
+    """把引用内容整理成 Obsidian 友好的独立引用块。"""
+    text = clean_note_text(text)
+    if not text:
+        return "(待填入)"
+    parts = [p.strip().lstrip("> ").strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
+    if not parts:
+        parts = [text]
+    return "\n\n".join(f"> {part}" for part in parts)
+
+
+def normalize_body_text(text, default="(待填入)"):
+    """整理普通段落，保留模型生成的标题/列表/链接。"""
+    text = clean_note_text(text)
+    return text if text else default
+
+
+def normalize_explore_text(text):
+    """把待探索问题拆成多条 bullet。"""
+    text = clean_note_text(text)
+    if not text:
+        return ""
+
+    text = re.sub(r"(?<!^)(?<!\n)(\d+[.、]\s*)", r"\n\1", text)
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    items = []
+    for line in lines:
+        line = re.sub(r"^[-*+]\s+", "", line).strip()
+        if line in ("-", "*", "+"):
+            continue
+        numbered = re.match(r"^\d+[.、]\s*(.+)$", line)
+        if numbered:
+            line = numbered.group(1).strip()
+        if line:
+            items.append(line)
+
+    deduped = []
+    for item in items:
+        if item not in deduped:
+            deduped.append(item)
+    return "\n".join(f"- {item}" for item in deduped)
+
+
+def normalize_note_content(content):
+    """最终落盘前的 Markdown 清洗。"""
+    content = decode_escaped_newlines(content)
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
+    content = re.sub(r"\n{4,}", "\n\n\n", content)
+
+    # 避免二级段落里再出现重复二级标题，保护主结构。
+    content = content.replace("\n## 联想\n", "\n### 联想\n")
+
+    # 确保主段落之间至少有一个空行。
+    content = re.sub(r"(?<!\n)\n(## [^\n]+)", r"\n\n\1", content)
+    content = re.sub(r"(---)\n(## )", r"\1\n\n\2", content, count=1)
+    return content.strip() + "\n"
+
+
+def extract_frontmatter(content):
+    if content.startswith("---\n"):
+        end = content.find("\n---", 4)
+        if end >= 0:
+            return content[:end + 4].strip(), content[end + 4:].lstrip()
+    return "", content
+
+
+def extract_sections(content):
+    sections = {}
+    current = None
+    buf = []
+    for line in content.splitlines():
+        is_known_h2 = line.startswith("## ") and any(label in line for label in SECTION_MAP.values())
+        if is_known_h2:
+            if current is not None:
+                sections[current] = "\n".join(buf).strip()
+            current = line[3:].strip()
+            buf = []
+        elif current is not None:
+            buf.append(line)
+    if current is not None:
+        sections[current] = "\n".join(buf).strip()
+    return sections
+
+
+def normalize_understanding_section(text):
+    text = normalize_body_text(text)
+    if text.startswith("(待填入)"):
+        return text
+    return text
+
+
+def normalize_connection_section(text):
+    text = normalize_body_text(text, default="")
+    if text.startswith("## 联想"):
+        text = "### 联想" + text[len("## 联想"):]
+    return text
+
+
+def compile_note_content(content):
+    """把已有笔记重新编译成稳定的 Obsidian 三段式。"""
+    frontmatter, body = extract_frontmatter(content)
+    sections = extract_sections(body)
+
+    quote = sections.get("📖 引用原文", sections.get("引用原文", ""))
+    understanding = sections.get("💭 我的理解", sections.get("我的理解", ""))
+    connections = sections.get("🔗 让我想到", sections.get("让我想到", ""))
+    explore = sections.get("❓ 待探索", sections.get("待探索", ""))
+
+    parts = []
+    if frontmatter:
+        parts.append(frontmatter)
+
+    parts.append("## 📖 引用原文\n" + normalize_quote_text(quote))
+    parts.append("## 💭 我的理解\n" + normalize_understanding_section(understanding))
+    parts.append("## 🔗 让我想到\n" + normalize_connection_section(connections))
+
+    explore = normalize_explore_text(explore)
+    if explore:
+        parts.append("## ❓ 待探索\n" + explore)
+    else:
+        parts.append("## ❓ 待探索")
+
+    return normalize_note_content("\n\n".join(parts))
+
+
 def format_frontmatter(meta):
     """生成 YAML frontmatter"""
     lines = ["---"]
@@ -154,8 +296,8 @@ def create_note(notes_dir, args, config=None):
     }
 
     tmpl = load_template(config)
-    quote = args.quote or ""
-    understanding = args.understanding or "(待填入)"
+    quote = normalize_quote_text(args.quote)
+    understanding = normalize_body_text(args.understanding)
 
     if tmpl:
         content = tmpl.replace("{{book}}", meta.get("book", ""))
@@ -171,10 +313,7 @@ def create_note(notes_dir, args, config=None):
         content = format_frontmatter(meta)
         content += "## 📖 引用原文\n"
         if quote:
-            for q in quote.split("\\n"):
-                q = q.strip()
-                if q:
-                    content += f"> {q}\n\n"
+            content += quote + "\n\n"
         else:
             content += "> (待填入)\n\n"
         content += "## 💭 我的理解\n"
@@ -182,6 +321,7 @@ def create_note(notes_dir, args, config=None):
         content += "## 🔗 让我想到\n\n"
         content += "## ❓ 待探索\n\n"
 
+    content = normalize_note_content(content)
     result = safe_write(filepath, content)
     if not result["ok"]:
         error(IO_ERROR, result["message"], hint=result.get("hint", ""),
@@ -244,12 +384,15 @@ def update_section(args):
 
     new_content = f"## {SECTION_MAP.get(section, section)}\n"
     if args.content:
-        new_content += args.content.rstrip() + "\n"
+        if section in ("引用原文", "quote"):
+            new_content += normalize_quote_text(args.content) + "\n"
+        else:
+            new_content += normalize_body_text(args.content, default="") + "\n"
     if not new_content.endswith("\n\n"):
         new_content += "\n"
 
     lines[sec_idx:next_idx] = [new_content]
-    full_content = "".join(lines)
+    full_content = normalize_note_content("".join(lines))
 
     result = safe_write(filepath, full_content, check_mtime=mtime)
     if not result["ok"]:
@@ -279,12 +422,12 @@ def append_section(args):
     next_idx = find_next_section(lines, sec_idx + 1)
 
     insert_pos = next_idx
-    content = args.content.rstrip() + "\n"
+    content = normalize_body_text(args.content, default="") + "\n"
     if insert_pos > 0 and lines[insert_pos - 1].strip() != "":
         content = "\n" + content
 
     lines.insert(insert_pos, content)
-    full_content = "".join(lines)
+    full_content = normalize_note_content("".join(lines))
 
     result = safe_write(filepath, full_content, check_mtime=mtime)
     if not result["ok"]:
@@ -319,15 +462,38 @@ def finalize_note(args):
 
     # 追加待探索
     if args.explore:
+        explore = normalize_explore_text(args.explore)
         if "## ❓ 待探索" in content:
-            content = content.rstrip() + f"\n- {args.explore}\n"
+            content = content.rstrip() + f"\n{explore}\n"
         else:
-            content = content.rstrip() + f"\n\n## ❓ 待探索\n- {args.explore}\n"
+            content = content.rstrip() + f"\n\n## ❓ 待探索\n{explore}\n"
 
+    content = normalize_note_content(content)
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
 
     print(json.dumps({"status": "finalized", "path": filepath}, ensure_ascii=False))
+
+
+def compile_note(args):
+    """重新编译已有笔记为稳定的 Obsidian 三段式。"""
+    filepath = args.path
+
+    if not os.path.exists(filepath):
+        print(json.dumps({"status": "error", "message": f"文件不存在: {filepath}"}, ensure_ascii=False))
+        sys.exit(1)
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+    mtime = os.path.getmtime(filepath)
+
+    compiled = compile_note_content(content)
+    result = safe_write(filepath, compiled, check_mtime=mtime)
+    if not result["ok"]:
+        print(json.dumps(result, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
+
+    print(json.dumps({"ok": True, "status": "compiled", "path": filepath}, ensure_ascii=False))
 
 
 def main():
@@ -359,6 +525,9 @@ def main():
     p_finalize.add_argument("--tags", default="")
     p_finalize.add_argument("--explore", default="")
 
+    p_compile = sub.add_parser("compile", help="整理已有笔记为 Obsidian 三段式")
+    p_compile.add_argument("--path", required=True)
+
     args = parser.parse_args()
 
     if not args.command:
@@ -376,6 +545,8 @@ def main():
         append_section(args)
     elif args.command == "finalize":
         finalize_note(args)
+    elif args.command == "compile":
+        compile_note(args)
 
 
 if __name__ == "__main__":

@@ -73,6 +73,28 @@ tags:
 | 阶段2结束 | 覆盖更新 `💭 我的理解` | `python write_note.py update --path ... --section 我的理解 --content "..."` |
 | 阶段3中 | 每有1条联想追加 | `python write_note.py append --path ... --section 让我想到 --content "..."` |
 | 阶段4 | 补全 frontmatter + `❓ 待探索` | `python write_note.py finalize --path ... --tags "..." --explore "..."` |
+| 阶段4最后 | 整篇笔记编译整理 | `python write_note.py compile --path ...` |
+
+## 最终编译要求
+
+阶段4必须在 `finalize` 后调用 `compile`，把对话过程中的粗糙片段整理成 Obsidian 成品笔记。
+
+- 不允许保留字面量 `\n`、`\n\n`
+- `引用原文` 必须是多个独立 quote block
+- `我的理解` 应该有清楚层级，可用 `###` 小标题、列表、表格
+- `让我想到` 应该拆成可复用段落，优先加入 `[[内部链接]]`
+- `待探索` 每个问题单独一条 bullet
+- 不要把对用户的聊天语气、阶段提示、"已写入" 等过程文本写进笔记
+
+## 章节字段语义
+
+frontmatter 的 `章节` 表示大章，不表示小节。例如阅读第7章第三节时仍写：
+
+```yaml
+章节: 7.字母"B"与数字"13"
+```
+
+小节名（如 `光环效应与群体的智慧`）放在文件名、正文标题、状态字段或概念名中，不覆盖 `章节`。
 
 ## 模板切换
 
