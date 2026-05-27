@@ -189,6 +189,23 @@ def test_learning_contract_tool_passes_user_before_subcommand(monkeypatch):
     assert captured["args"][:4] == ("--user", "ou_test", "--json", "show")
 
 
+def test_write_note_tool_passes_user_before_subcommand(monkeypatch):
+    captured = {}
+
+    def fake_run_script(name, *args):
+        captured["name"] = name
+        captured["args"] = args
+        return "{}"
+
+    import agent
+    monkeypatch.setattr(agent, "run_script", fake_run_script)
+
+    execute_tool("write_note", {"action": "create", "book": "测试书", "concept": "概念"}, user_id="ou_test")
+
+    assert captured["name"] == "write_note.py"
+    assert captured["args"][:3] == ("--user", "ou_test", "create")
+
+
 def test_openai_replays_reasoning_content(monkeypatch):
     captured = {}
 

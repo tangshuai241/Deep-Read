@@ -18,6 +18,7 @@ note:
   template: "obsidian-three-section"
   use_wikilinks: false                   # 无 Obsidian 时关闭
   date_in_frontmatter: false
+  isolate_by_user: true                  # 多用户试用默认隔离到 notes/users/<user_id>/
 
 reading:
   max_words_per_session: 8000

@@ -171,6 +171,7 @@ deepread/
 - `llm.model` — 模型 ID（默认 `deepseek-v4-pro`）
 - `llm.thinking` — DeepSeek thinking 开关：`auto` / `disabled` / `enabled`
 - `note.template` — obsidian-three-section / cornell / zettelkasten / plain
+- `note.isolate_by_user` — 多人共用飞书 Bot 时按用户隔离笔记到 `notes/users/<user_id>/`
 - `cognition.enabled` — 是否启用认知画像
 - `integrations.weread.enabled` — 是否启用微信读书
 

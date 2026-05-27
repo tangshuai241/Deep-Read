@@ -71,6 +71,30 @@ def get_notes_dir(config):
         os.path.join(os.path.dirname(__file__), "..", "notes"))
 
 
+def should_isolate_user_notes(config):
+    notes_cfg = config.get("note", {})
+    if "isolate_by_user" in notes_cfg:
+        return bool(notes_cfg.get("isolate_by_user"))
+
+    profile = config.get("profile", {})
+    profile_name = str(profile.get("name", "")).lower()
+    return bool(profile.get("im_first")) or profile_name == "trial"
+
+
+def sanitize_user_id(user):
+    raw = str(user or "").strip()
+    if not raw:
+        return "default"
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw)
+    return safe.strip("._-") or "default"
+
+
+def resolve_user_notes_dir(base_notes_dir, user, config):
+    if not should_isolate_user_notes(config):
+        return base_notes_dir
+    return os.path.join(base_notes_dir, "users", sanitize_user_id(user))
+
+
 def get_vault_dir(config):
     return config.get("paths", {}).get("vault_dir",
         os.path.expanduser("~/Documents/知识库"))
@@ -770,6 +794,7 @@ def compile_note(args):
 
 def main():
     parser = argparse.ArgumentParser(description="DeepRead 笔记写入器")
+    parser.add_argument("--user", default="default", help="用户 ID（用于多用户笔记目录隔离）")
     sub = parser.add_subparsers(dest="command")
 
     p_create = sub.add_parser("create", help="创建笔记草稿")
@@ -807,7 +832,7 @@ def main():
         return
 
     config = load_config()
-    notes_dir = get_notes_dir(config)
+    notes_dir = resolve_user_notes_dir(get_notes_dir(config), args.user, config)
 
     if args.command == "create":
         create_note(notes_dir, args, config)

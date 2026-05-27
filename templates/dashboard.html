@@ -4,16 +4,25 @@
 <div class="hero">
   <h1>DeepRead Studio</h1>
   <p class="hero-sub">本地深度阅读控制台 · 飞书负责输入，Obsidian 负责沉淀，这里看清中间发生了什么</p>
+  <div class="user-switch">
+    <span>用户</span>
+    <select id="dashboardUser" onchange="changeDashboardUser()">
+      <option value="all" {% if selected_user == 'all' %}selected{% endif %}>全部用户</option>
+      {% for u in users %}
+      <option value="{{ u.id }}" {% if selected_user == u.id %}selected{% endif %}>{{ u.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
 </div>
 
 <div class="modules">
-  <a href="/sessions" class="module-card">
+  <a href="/sessions{% if selected_user and selected_user != 'all' %}?user={{ selected_user | urlencode }}{% endif %}" class="module-card">
     <span class="module-icon">会话</span>
     <h3>会话回放</h3>
     <p>{{ agent_count }} Agent · {{ claude_count }} Claude Code</p>
     <small>查看对话、工具调用、错误定位</small>
   </a>
-  <a href="/notes" class="module-card">
+  <a href="/notes{% if selected_user and selected_user != 'all' %}?user={{ selected_user | urlencode }}{% endif %}" class="module-card">
     <span class="module-icon">笔记</span>
     <h3>笔记审阅</h3>
     <p>预览 Obsidian 笔记、compile、质量检查</p>
@@ -102,6 +111,8 @@
 .hero { margin-bottom: 24px; }
 .hero h1 { font-size: 24px; margin-bottom: 4px; }
 .hero-sub { color: #888; font-size: 14px; }
+.user-switch { margin-top: 10px; display: flex; align-items: center; gap: 8px; color: #888; font-size: 13px; }
+.user-switch select { padding: 5px 10px; border: 1px solid #ddd; border-radius: 6px; background: #fff; }
 
 .modules { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
 .module-card { background: #fff; border-radius: 8px; padding: 16px; text-decoration: none; color: #222; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: box-shadow .15s; }
@@ -195,5 +206,10 @@ function refreshStatus() {
 
 // 页面加载时自动刷新
 refreshStatus();
+
+function changeDashboardUser() {
+  const user = document.getElementById('dashboardUser').value;
+  window.location = user && user !== 'all' ? '/?user=' + encodeURIComponent(user) : '/?user=all';
+}
 </script>
 {% endblock %}

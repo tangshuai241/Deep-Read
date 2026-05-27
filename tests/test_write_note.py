@@ -8,7 +8,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from write_note import (create_note, update_section, append_section,
                          finalize_note, compile_note, slugify, SECTION_MAP,
-                         normalize_explore_text, compile_note_content)
+                         normalize_explore_text, compile_note_content,
+                         resolve_user_notes_dir, sanitize_user_id,
+                         should_isolate_user_notes)
 
 
 def setup_module():
@@ -39,6 +41,35 @@ def test_slugify():
     assert slugify("认知放松与真相错觉") == "认知放松与真相错觉"
     assert slugify("test:file?name") == "testfilename"
     assert "\\" not in slugify("a\\b/c")
+
+
+def test_user_note_isolation_defaults_by_profile():
+    assert should_isolate_user_notes({"profile": {"name": "trial"}}) is True
+    assert should_isolate_user_notes({"profile": {"name": "personal"}}) is False
+    assert should_isolate_user_notes({"profile": {"im_first": True}}) is True
+    assert should_isolate_user_notes({"profile": {"name": "trial"}, "note": {"isolate_by_user": False}}) is False
+    assert should_isolate_user_notes({"profile": {"name": "personal"}, "note": {"isolate_by_user": True}}) is True
+
+
+def test_resolve_user_notes_dir_sanitizes_user_id():
+    config = {"note": {"isolate_by_user": True}}
+    base = os.path.join("tmp", "notes")
+
+    assert sanitize_user_id("ou_abc-123") == "ou_abc-123"
+    assert sanitize_user_id("../bad/user") == "bad_user"
+    assert resolve_user_notes_dir(base, "ou_abc-123", config) == os.path.join(base, "users", "ou_abc-123")
+    assert resolve_user_notes_dir(base, "ou_abc-123", {"note": {"isolate_by_user": False}}) == base
+
+
+def test_create_note_can_write_to_user_isolated_dir():
+    with tempfile.TemporaryDirectory() as tmp:
+        base_notes = os.path.join(tmp, "notes")
+        notes_dir = resolve_user_notes_dir(base_notes, "ou_test", {"note": {"isolate_by_user": True}})
+
+        create_note(notes_dir, make_args(book="测试书", concept="用户隔离", chapter="1"))
+
+        note_path = os.path.join(base_notes, "users", "ou_test", "《测试书》", "用户隔离.md")
+        assert os.path.exists(note_path)
 
 
 def test_create_note():

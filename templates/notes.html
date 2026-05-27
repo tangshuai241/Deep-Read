@@ -5,6 +5,12 @@
 
 <div class="dir-bar">
   <input type="text" id="dirInput" value="{{ dir }}" placeholder="笔记目录路径" style="flex:1">
+  <select id="userInput">
+    <option value="">全部用户</option>
+    {% for u in users %}
+    <option value="{{ u.id }}" {% if selected_user == u.id %}selected{% endif %}>{{ u.label }}</option>
+    {% endfor %}
+  </select>
   <button onclick="changeDir()">浏览</button>
 </div>
 
@@ -12,6 +18,7 @@
 {% for n in notes %}
   <a href="/notes/view?path={{ n.path | urlencode }}" class="list-item">
     <span class="item-main">{{ n.name }}</span>
+    {% if isolate_by_user %}<span class="item-meta">{{ n.user_label }}</span>{% endif %}
     <span class="item-meta">{{ n.book }}</span>
     <span class="item-meta">{{ n.fm.get("章节", "") }}</span>
     <span class="item-meta">{{ n.fm.get("书名", "") }}</span>
@@ -25,7 +32,11 @@
 <script>
 function changeDir() {
   const dir = document.getElementById('dirInput').value;
-  window.location = '/notes?dir=' + encodeURIComponent(dir);
+  const user = document.getElementById('userInput').value;
+  const params = new URLSearchParams();
+  if (dir) params.set('dir', dir);
+  if (user) params.set('user', user);
+  window.location = '/notes?' + params.toString();
 }
 </script>
 {% endblock %}

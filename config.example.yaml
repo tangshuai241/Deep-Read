@@ -18,6 +18,7 @@ note:
   template: "obsidian-three-section"            # obsidian-three-section | cornell | zettelkasten | plain
   use_wikilinks: true
   date_in_frontmatter: false
+  isolate_by_user: false                        # 多人共用 Bot 时可设 true: notes/users/<user_id>/
 
 reading:
   max_words_per_session: 8000

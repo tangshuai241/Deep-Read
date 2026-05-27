@@ -5,6 +5,12 @@
 
 <div class="filter-bar">
   <input type="text" id="searchInput" placeholder="搜索：书名、章节、关键词..." oninput="doFilter()">
+  <select id="userFilter" onchange="changeUser()">
+    <option value="">全部用户</option>
+    {% for u in users %}
+    <option value="{{ u.id }}" {% if selected_user == u.id %}selected{% endif %}>{{ u.label }}</option>
+    {% endfor %}
+  </select>
   <select id="sourceFilter" onchange="doFilter()">
     <option value="all">全部来源</option>
     <option value="agent">飞书/终端 Agent</option>
@@ -21,7 +27,7 @@
      data-source="agent"
      data-notes="{{ 1 if s.has_notes else 0 }}"
      data-errors="{{ 1 if s.has_errors else 0 }}"
-     data-search="{{ s.title.lower() }} {{ s.book.lower() }} {{ s.chapter.lower() }}">
+     data-search="{{ s.title.lower() }} {{ s.book.lower() }} {{ s.chapter.lower() }} {{ s.user_id.lower() }}">
   <a href="/sessions/{{ s.id }}" class="session-link">
     <div class="session-main">
       <span class="session-title">{{ s.title }}</span>
@@ -33,6 +39,7 @@
     </div>
     <div class="session-sub">
       <span class="sub-source">{{ s.provider }}/{{ s.model }}</span>
+      <span class="sub-counts">用户ID {{ s.user_label }}</span>
       <span class="sub-counts">用户 {{ s.user_count }} · AI {{ s.ai_count }} · 工具 {{ s.tool_count }}</span>
       <span class="sub-time">{{ s.updated[:16] }}</span>
     </div>
@@ -86,6 +93,11 @@ function doFilter() {
     if (show) count++;
   });
   document.getElementById('resultCount').textContent = count + ' 条';
+}
+function changeUser() {
+  const user = document.getElementById('userFilter').value;
+  const url = user ? '/sessions?user=' + encodeURIComponent(user) : '/sessions';
+  window.location = url;
 }
 doFilter();
 </script>

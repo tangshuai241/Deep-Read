@@ -35,6 +35,75 @@ def load_config():
     except (FileNotFoundError, PermissionError):
         return {}
 
+def should_isolate_user_notes(config):
+    notes_cfg = config.get("note", {})
+    if "isolate_by_user" in notes_cfg:
+        return bool(notes_cfg.get("isolate_by_user"))
+    profile = config.get("profile", {})
+    profile_name = str(profile.get("name", "")).lower()
+    return bool(profile.get("im_first")) or profile_name == "trial"
+
+def sanitize_user_id(user):
+    raw = str(user or "").strip()
+    if not raw:
+        return "default"
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw)
+    return safe.strip("._-") or "default"
+
+def resolve_user_notes_dir(base_notes_dir, user, config):
+    if not should_isolate_user_notes(config):
+        return base_notes_dir
+    return os.path.join(base_notes_dir, "users", sanitize_user_id(user))
+
+def user_label(user_id):
+    text = str(user_id or "default")
+    if text == "default":
+        return "default"
+    return f"{text[:8]}...{text[-4:]}" if len(text) > 14 else text
+
+def pid_is_running(pid):
+    if not pid:
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except Exception:
+            return False
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        running = handle != 0
+        if handle:
+            kernel32.CloseHandle(handle)
+        return running
+    except Exception:
+        return False
+
+def known_users():
+    users = {}
+    if SESSIONS_DIR.exists():
+        for f in SESSIONS_DIR.glob("*.json"):
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    user_id = json.load(fh).get("user_id", "default")
+                users[user_id] = user_label(user_id)
+            except Exception:
+                pass
+    state_root = BASE / "state"
+    if state_root.exists():
+        for child in state_root.iterdir():
+            if child.is_dir() and child.name != "sessions":
+                users.setdefault(child.name, user_label(child.name))
+    if not users:
+        users["default"] = "default"
+    return [{"id": uid, "label": label} for uid, label in sorted(users.items(), key=lambda item: item[1])]
+
 def _allowed_path(path: str) -> bool:
     """限制文件访问范围：notes_dir / vault_dir / deepread 项目目录"""
     if not path:
@@ -55,21 +124,53 @@ def load_state():
             return json.load(f)
     return {}
 
+def load_user_state(user="default"):
+    state_root = BASE / "state"
+    p = state_root / sanitize_user_id(user) / "current.json"
+    if not p.exists() and user != "default":
+        p = state_root / str(user) / "current.json"
+    if p.exists():
+        with open(p, encoding="utf-8-sig") as f:
+            return json.load(f)
+    return {}
+
 def get_notes_dir():
     c = load_config()
     return c.get("paths", {}).get("notes_dir", str(BASE / "notes"))
 
-def list_notes(base_dir):
+def note_owner_from_path(path, base_dir):
+    config = load_config()
+    if not should_isolate_user_notes(config):
+        return "default"
+    try:
+        rel = Path(os.path.relpath(path, base_dir))
+    except ValueError:
+        return ""
+    parts = rel.parts
+    if len(parts) >= 3 and parts[0] == "users":
+        return parts[1]
+    return ""
+
+def list_notes(base_dir, user=""):
     notes = []
     if not os.path.isdir(base_dir):
         return notes
+    config = load_config()
+    base_notes = get_notes_dir()
+    target_user = sanitize_user_id(user) if user else ""
     for root, dirs, files in os.walk(base_dir):
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         for f in sorted(files):
             if not f.endswith(".md"): continue
             fp = os.path.join(root, f)
+            owner = note_owner_from_path(fp, base_notes)
+            if target_user and should_isolate_user_notes(config) and owner and owner != target_user:
+                continue
             rel = os.path.relpath(fp, base_dir)
             book = rel.split(os.sep)[0] if os.sep in rel else ""
+            if owner and rel.startswith(os.path.join("users", owner) + os.sep):
+                rest = rel.split(os.sep, 2)
+                book = rest[2].split(os.sep)[0] if len(rest) >= 3 and os.sep in rest[2] else ""
             mtime = os.path.getmtime(fp)
             # 读 frontmatter
             fm = {}
@@ -86,7 +187,8 @@ def list_notes(base_dir):
             except Exception: pass
             notes.append({
                 "path": fp, "rel": rel, "book": book, "name": f.replace(".md", ""),
-                "mtime": mtime, "fm": fm
+                "mtime": mtime, "fm": fm, "user_id": owner or "default",
+                "user_label": user_label(owner or "default")
             })
     return sorted(notes, key=lambda x: x["mtime"], reverse=True)
 
@@ -126,6 +228,8 @@ def list_sessions():
             sess.append({
                 "id": f.stem, "title": title or "(未命名)",
                 "book": book, "chapter": ch,
+                "user_id": d.get("user_id", "default"),
+                "user_label": user_label(d.get("user_id", "default")),
                 "provider": d.get("provider", ""), "model": d.get("model", ""),
                 "user_count": users, "ai_count": assistants, "tool_count": tools,
                 "has_notes": has_notes, "has_errors": has_errors, "completed": completed,
@@ -242,8 +346,10 @@ def compare_notes(left_path, right_path):
 
 # ── pages ──────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request):
-    state = load_state()
+def dashboard(request: Request, user: str = ""):
+    users = known_users()
+    selected_user = user or (users[0]["id"] if len(users) == 1 else "all")
+    state = load_user_state(selected_user) if selected_user != "all" else {}
     current = state.get("current", {})
     concepts_all = [str(c) for c in state.get("concepts_covered", [])]
 
@@ -266,7 +372,8 @@ def dashboard(request: Request):
         reading["next"] = "继续对话"
 
     # 知识积累
-    notes_dir = get_notes_dir()
+    config = load_config()
+    notes_dir = get_notes_dir() if selected_user == "all" else resolve_user_notes_dir(get_notes_dir(), selected_user, config)
     book_notes = 0
     if os.path.isdir(notes_dir):
         book_dir = os.path.join(notes_dir, f"《{reading['book']}》")
@@ -282,6 +389,8 @@ def dashboard(request: Request):
     all_sessions = list_sessions()
     recent = []
     for s in all_sessions:
+        if selected_user and selected_user != "all" and s.get("user_id", "default") != selected_user:
+            continue
         title = s.get("title", "")
         # 跳过测试/寒暄/空白
         if any(skip in title for skip in ("你好", "hi", "model_check", "route_check", "测试", "test")):
@@ -303,17 +412,22 @@ def dashboard(request: Request):
     return render("dashboard.html", {
         "request": request, "reading": reading, "knowledge": knowledge,
         "recent": recent, "system": system,
-        "agent_count": len(all_sessions), "claude_count": claude_count
+        "agent_count": len(all_sessions), "claude_count": claude_count,
+        "users": users, "selected_user": selected_user,
     })
 
 @app.get("/sessions", response_class=HTMLResponse)
-def sessions_page(request: Request):
+def sessions_page(request: Request, user: str = ""):
     agent_sessions = list_sessions()
+    if user:
+        agent_sessions = [s for s in agent_sessions if s.get("user_id", "default") == user]
     claude_sessions = list_claude_sessions()
     return render("sessions.html", {
         "request": request,
         "agent_sessions": agent_sessions,
-        "claude_sessions": claude_sessions
+        "claude_sessions": claude_sessions,
+        "users": known_users(),
+        "selected_user": user,
     })
 
 @app.get("/sessions/{sid}", response_class=HTMLResponse)
@@ -325,11 +439,20 @@ def session_detail(request: Request, sid: str):
     })
 
 @app.get("/notes", response_class=HTMLResponse)
-def notes_page(request: Request, dir: str = ""):
-    base_dir = dir if dir else get_notes_dir()
-    notes = list_notes(base_dir)
+def notes_page(request: Request, dir: str = "", user: str = ""):
+    config = load_config()
+    base_root = get_notes_dir()
+    if dir:
+        base_dir = dir
+    elif user and should_isolate_user_notes(config):
+        base_dir = resolve_user_notes_dir(base_root, user, config)
+    else:
+        base_dir = base_root
+    notes = list_notes(base_dir, user=user if not dir else "")
     return render("notes.html", {
-        "request": request, "notes": notes, "dir": base_dir
+        "request": request, "notes": notes, "dir": base_dir,
+        "users": known_users(), "selected_user": user,
+        "isolate_by_user": should_isolate_user_notes(config),
     })
 
 @app.get("/notes/view", response_class=HTMLResponse)
@@ -436,8 +559,8 @@ def api_compile(data: dict):
     return {"ok": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr}
 
 @app.get("/api/state")
-def api_state():
-    return load_state()
+def api_state(user: str = Query("default")):
+    return load_user_state(user)
 
 @app.get("/api/doctor")
 def api_doctor(deep: int = Query(0)):
@@ -478,12 +601,7 @@ def api_bot_status():
     except (json.JSONDecodeError, OSError):
         return {"ok": True, "running": False, "stale": False, "pid": None}
     pid = int(lock.get("pid", 0))
-    import ctypes
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-    running = handle != 0
-    if handle:
-        kernel32.CloseHandle(handle)
+    running = pid_is_running(pid)
     return {
         "ok": True, "running": running, "stale": not running and pid > 0,
         "pid": pid, "started_at": lock.get("started_at", ""),

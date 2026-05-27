@@ -215,7 +215,7 @@ def execute_tool(name, params, user_id="default"):
                           ("content", "--content"), ("explore", "--explore")]:
             if key in p and p[key]:
                 args.extend([flag, str(p[key])])
-        return run_script("write_note.py", action, *args)
+        return run_script("write_note.py", "--user", user_id, action, *args)
     elif name == "read_state":
         return run_script("state.py", "--user", user_id, "show")
     elif name == "update_state":
