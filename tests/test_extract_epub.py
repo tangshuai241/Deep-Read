@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from extract_epub import (resolve_book_path, parse_ncx, CHAPTER_PATTERN,
+                           chinese_num_to_int,
                            get_book_meta, clean_html)
 
 
@@ -16,8 +17,19 @@ def setup_module():
 def test_chapter_pattern():
     assert CHAPTER_PATTERN.match("第5章 你的直觉有可能只是错觉")
     assert CHAPTER_PATTERN.match("第38章 思考生活")
+    assert CHAPTER_PATTERN.match("第一章 洪武大帝")
+    assert CHAPTER_PATTERN.match("第七章 朱棣的选择")
     assert not CHAPTER_PATTERN.match("序言")
     assert not CHAPTER_PATTERN.match("第一部分 系统1")
+
+
+def test_chinese_num_to_int():
+    assert chinese_num_to_int("一") == 1
+    assert chinese_num_to_int("十") == 10
+    assert chinese_num_to_int("十一") == 11
+    assert chinese_num_to_int("二十三") == 23
+    assert chinese_num_to_int("一百零二") == 102
+    assert chinese_num_to_int("38") == 38
 
 
 def test_is_chapter():

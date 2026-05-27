@@ -63,7 +63,42 @@ def clean_html(html_content):
     return text.strip()
 
 
-CHAPTER_PATTERN = re.compile(r'第(\d+)章')
+CHINESE_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+
+
+def chinese_num_to_int(text):
+    """把常见中文数字转成整数，支持 一/十一/二十三/一百零二。"""
+    text = text.strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+
+    total = 0
+    section = 0
+    number = 0
+    units = {"十": 10, "百": 100, "千": 1000}
+
+    for ch in text:
+        if ch in CHINESE_DIGITS:
+            number = CHINESE_DIGITS[ch]
+        elif ch in units:
+            unit = units[ch]
+            if number == 0:
+                number = 1
+            section += number * unit
+            number = 0
+        else:
+            return None
+
+    total += section + number
+    return total if total > 0 else 0
+
+
+CHAPTER_PATTERN = re.compile(r'第([0-9零〇一二两三四五六七八九十百千]+)章')
 PART_PATTERN = re.compile(r'第[一二三四五六七八九十百]+部分')
 NCX_ENTRY_PATTERN = re.compile(
     r'<navPoint[^>]*>.*?<navLabel>\s*<text>(.*?)</text>\s*</navLabel>.*?<content\s+src="([^"]*)"',
@@ -84,12 +119,13 @@ def parse_ncx(book):
                 fname = m.group(2).split('#')[0]
                 cm = CHAPTER_PATTERN.match(title)
                 pm = PART_PATTERN.match(title)
+                chapter_num = chinese_num_to_int(cm.group(1)) if cm else None
                 entries.append({
                     "title": title,
                     "file": fname,
                     "is_chapter": bool(cm),
                     "is_part": bool(pm),
-                    "chapter_num": int(cm.group(1)) if cm else None
+                    "chapter_num": chapter_num
                 })
             return entries
     return []
