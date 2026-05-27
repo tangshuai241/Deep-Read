@@ -255,3 +255,61 @@ tags:
         assert any("阶段3" in w or "聊天残留" in w for w in result["warnings"])
     finally:
         os.unlink(path)
+
+
+def test_history_mode_requires_timeline_and_judgment():
+    content = """---
+书名: 《明朝那些事儿》
+章节: 第一章
+reading_mode: historical_context
+tags:
+  - 读书笔记
+---
+## 📖 引用原文
+> 这是关于明朝开端的一段历史叙述。
+
+## 💭 我的理解
+这一章主要在讲人物选择和时代环境之间的关系，朱元璋并不是凭空出现的英雄，而是在乱世结构中逐渐形成自己的判断和组织方式。
+
+## 🔗 让我想到
+这让我想到现实中的组织上升期，个人能力固然重要，但更关键的是能否识别环境里的机会和约束。
+
+## ❓ 待探索
+- 【理解缺口】这一时期不同势力的资源差异到底在哪里？
+"""
+    path = _write_temp_note(content)
+    try:
+        result = check_note(path, config={})
+        assert any("时间线" in w for w in result["warnings"])
+        assert any("个人判断" in w or "现实镜鉴" in w for w in result["warnings"])
+    finally:
+        os.unlink(path)
+
+
+def test_history_mode_good_note_passes_mode_checks():
+    content = """---
+书名: 《明朝那些事儿》
+章节: 第一章
+reading_mode: historical_context
+tags:
+  - 读书笔记
+---
+## 📖 引用原文
+> 这是关于明朝开端的一段历史叙述。
+
+## 💭 我的理解
+- **时间线**：先是元末秩序瓦解，地方力量各自扩张，然后朱元璋在竞争中逐渐完成组织整合。
+- **关键转折**：人物选择并不只是性格问题，也受到制度、资源和军事环境的共同推动。
+
+## 🔗 让我想到
+- **我的判断**：历史阅读不能只看谁更聪明，还要看环境给了谁更稳定的反馈循环。这个现实镜鉴对理解组织竞争很有帮助。
+
+## ❓ 待探索
+- 【理解缺口】元末地方势力为什么没有形成更稳定的联盟？
+"""
+    path = _write_temp_note(content)
+    try:
+        result = check_note(path, config={})
+        assert not any("历史脉络模式" in w for w in result["warnings"])
+    finally:
+        os.unlink(path)

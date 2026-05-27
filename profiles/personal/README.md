@@ -14,7 +14,7 @@ python init.py --profile personal
 
 ## 完整能力
 
-- 8 种阅读模式覆盖所有书籍类型
+- 9 种阅读模式覆盖主要书籍类型
 - Obsidian 三段式笔记 + 自动双链
 - LLM-Wiki 概念路由和语义增强
 - 概念卡完整扫描和别名链接

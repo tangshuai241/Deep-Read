@@ -48,14 +48,15 @@ llm:
 
 profile:
   name: personal
-  default_modes:                         # personal 开放全部 8 种模式
+  default_modes:                         # personal 开放全部 9 种模式
     - concept_deep_read
     - proposition_dialogue
     - method_conversion
     - exam_mastery
     - textbook_derivation
-    - standard_lookup
-    - case_review
-    - literature_experience
+      - standard_lookup
+      - case_review
+      - historical_context
+      - literature_experience
   concept_pack: ""                       # personal 用 vault 概念卡
   im_first: false

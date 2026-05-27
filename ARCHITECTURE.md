@@ -26,8 +26,8 @@ DeepRead 不是单纯的网页阅读器，也不是只给 Claude Code 使用的 
 
 | Profile | 面向对象 | 默认能力 | 边界 |
 |---|---|---|---|
-| `trial` | 朋友、同学、新手试用 | IM-first、4 种常用阅读模式、Trial 基础概念卡包、本地 Markdown 输出 | 不强制 Obsidian、LLM-Wiki、个人知识库 |
-| `personal` | 个人完整版 | 飞书 Bot、Obsidian、LLM-Wiki、用户概念卡、认知画像、8 种阅读模式 | 保留完整增强链路 |
+| `trial` | 朋友、同学、新手试用 | IM-first、5 种常用阅读模式、Trial 基础概念卡包、本地 Markdown 输出 | 不强制 Obsidian、LLM-Wiki、个人知识库 |
+| `personal` | 个人完整版 | 飞书 Bot、Obsidian、LLM-Wiki、用户概念卡、认知画像、9 种阅读模式 | 保留完整增强链路 |
 
 旧配置没有 `profile.name` 时，系统默认按 `personal` 处理，并由 `doctor` 给出迁移提示。
 
@@ -131,7 +131,7 @@ python cli.py bot restart --reply
   -> Agent 按命题辨析方式追问
 ```
 
-当前 8 种模式：
+当前 9 种模式：
 
 | 模式 | key | Trial | 用途 |
 |---|---|:--:|---|
@@ -142,6 +142,7 @@ python cli.py bot restart --reply
 | 教材推导 | `textbook_derivation` | no | 学术教材、公式推导、理论课程 |
 | 规范检索 | `standard_lookup` | no | 法规、标准、合同、工程规范 |
 | 案例复盘 | `case_review` | no | 商业案例、工程案例、事故复盘 |
+| 历史脉络 | `historical_context` | yes | 历史、传记、组织史、王朝兴衰类内容 |
 | 文学体验 | `literature_experience` | no | 小说、散文、传记、纪实文学 |
 
 CLI 入口：
@@ -242,7 +243,7 @@ note_quality.py
 | 飞书入口 | `adapters/feishu_bot.py` | 事件监听、消息去重、会话映射、自动回复 |
 | CLI | `cli.py` | doctor、bot、quality、concepts、profile、modes、contract 等统一入口 |
 | Web 控制台 | `server.py` + `templates/` | 状态查看、Bot 管理、doctor、quality、概念卡报告、模式说明 |
-| 阅读模式 | `scripts/reading_modes.py` | 8 种模式定义、Trial/Personal 过滤、模式建议 |
+| 阅读模式 | `scripts/reading_modes.py` | 9 种模式定义、Trial/Personal 过滤、模式建议 |
 | 学习契约 | `scripts/learning_contract.py` | A/B/C/D 知识地图、阶段检查、模式字段、覆盖报告 |
 | EPUB 解析 | `scripts/extract_epub.py` | EPUB 章节和小节提取 |
 | 笔记写入 | `scripts/write_note.py` | create/update/append/finalize/compile |
@@ -458,7 +459,7 @@ DeepSeek Thinking：
 - Trial 不强制 LLM-Wiki。
 - 概念卡是增强资产，不要求所有书都概念化。
 - 微信桥接未实现，只保留 IM 抽象与未来方向。
-- Personal 额外 4 种模式已可识别和写入契约，深度阶段标准后续继续细化。
+- Personal 额外模式已可识别和写入契约，深度阶段标准后续继续细化。
 
 ---
 

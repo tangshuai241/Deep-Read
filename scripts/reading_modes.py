@@ -81,6 +81,18 @@ READING_MODES = {
                             "项目", "实践"],
         "notable_checks": {},
     },
+    "historical_context": {
+        "name": "历史脉络",
+        "desc": "时间线→人物关系→事件转折→制度背景→现实镜鉴，适合历史/传记/组织史",
+        "target": "理解历史事件的来龙去脉、关键人物选择和结构性原因",
+        "sections": ["时间线梳理", "人物与势力", "关键转折", "制度/环境原因", "我的判断", "延伸联想"],
+        "trial": True,
+        "suggest_patterns": ["明朝那些事", "明朝那些事儿", "历史", "王朝", "帝王",
+                            "皇帝", "朝代", "战争", "人物传记", "组织史",
+                            "朱元璋", "朱棣", "万历", "张居正", "传记"],
+        "stage_notes": "按历史脉络推进：先还原时间线和人物关系，再追问关键转折、制度背景、人物选择和可迁移镜鉴。不强求概念覆盖率，重点防止只复述故事。",
+        "notable_checks": {"timeline": "必须有时间线或事件顺序", "judgment": "必须有个人判断或现实镜鉴"},
+    },
     "literature_experience": {
         "name": "文学体验",
         "desc": "沉浸→感受→共鸣→表达，适合小说/散文/传记",
@@ -105,6 +117,8 @@ MODE_QUICK_NAMES = {
     "推导": "textbook_derivation", "数学": "textbook_derivation",
     "规范": "standard_lookup", "标准": "standard_lookup",
     "案例": "case_review", "复盘": "case_review",
+    "历史": "historical_context", "脉络": "historical_context",
+    "明朝": "historical_context", "传记": "historical_context",
     "文学": "literature_experience", "小说": "literature_experience",
     "散文": "literature_experience",
 }

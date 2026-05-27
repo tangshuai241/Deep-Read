@@ -273,6 +273,8 @@ def check_note(note_path, config=None):
             reading_mode = "method_conversion"
         elif "核心命题" in body and ("我的立场" in body or "反例" in body):
             reading_mode = "proposition_dialogue"
+        elif "时间线" in body and ("关键转折" in body or "人物" in body):
+            reading_mode = "historical_context"
 
     if reading_mode == "exam_mastery":
         has_self_test = bool(re.search(r"(自测题|自测|待复习|易错)", body))
@@ -294,6 +296,17 @@ def check_note(note_path, config=None):
         has_stance = bool(re.search(r"(我的立场|我的判断|反例|我不同|我同意)", body))
         if not has_stance:
             warnings.append("[命题模式] 缺少个人立场或反例")
+
+    elif reading_mode == "historical_context":
+        has_timeline = bool(re.search(r"(时间线|事件顺序|先后|起因|经过|结果)", body))
+        if not has_timeline:
+            warnings.append("[历史脉络模式] 缺少时间线或事件顺序")
+        has_turning_point = bool(re.search(r"(关键转折|转折|人物选择|制度|环境原因|结构性原因)", body))
+        if not has_turning_point:
+            suggestions.append("[历史脉络模式] 建议补充关键转折、人物选择或制度背景")
+        has_judgment = bool(re.search(r"(我的判断|现实镜鉴|启发|教训|可迁移)", body))
+        if not has_judgment:
+            warnings.append("[历史脉络模式] 缺少个人判断或现实镜鉴")
 
     # ── 汇总评分 ──
     score = max(0, 100 - len(errors) * 15 - len(warnings) * 5)

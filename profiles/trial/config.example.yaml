@@ -48,10 +48,11 @@ llm:
 # Trial 特性
 profile:
   name: trial
-  default_modes:                         # trial 只开放 4 个常用模式
-    - concept_deep_read
-    - proposition_dialogue
-    - method_conversion
-    - exam_mastery
+  default_modes:                         # trial 开放 5 个常用模式
+      - concept_deep_read
+      - proposition_dialogue
+      - method_conversion
+      - exam_mastery
+      - historical_context
   concept_pack: "profiles/trial/concepts"  # 基础概念卡路径
   im_first: true
