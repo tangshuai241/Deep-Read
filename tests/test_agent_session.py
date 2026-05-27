@@ -240,3 +240,47 @@ def test_openai_replays_reasoning_content(monkeypatch):
 
     assert replayed["role"] == "assistant"
     assert replayed["reasoning_content"] == "hidden chain"
+
+
+def test_call_api_returns_all_tool_results(monkeypatch):
+    import agent
+
+    class DummyLLM:
+        name = "Dummy"
+        model = "dummy-model"
+        api_type = "openai"
+        calls = 0
+
+        def chat(self, system_prompt, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return "", [{"id": "tc1", "name": "write_note", "input": {"action": "compile"}}], object()
+            if self.calls == 2:
+                return "", [{"id": "tc2", "name": "read_state", "input": {}}], object()
+            return "完成", [], object()
+
+        def extract_reasoning_content(self, raw):
+            return ""
+
+    monkeypatch.setattr(agent, "execute_tool", lambda name, inp, user_id: f"{name}-result")
+    monkeypatch.setattr(agent, "log_api_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent, "log_tool_call", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent, "save_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent.DeepReadAgent, "_save_recovery", lambda self: None)
+    monkeypatch.setattr(agent.DeepReadAgent, "__init__", lambda self: None)
+
+    bot = agent.DeepReadAgent()
+    bot.llm = DummyLLM()
+    bot.system_prompt = ""
+    bot.messages = []
+    bot.use_tools = []
+    bot.user_id = "ou_test"
+    bot.session_id = "sid"
+    bot.meta = {"book": "book", "chapter": "chapter"}
+    bot._last_user_input = "收尾"
+    bot._thinking_override = None
+
+    text, tools = bot._call_api_internal()
+
+    assert text == "完成"
+    assert [item[1] for item in tools] == ["write_note", "read_state"]

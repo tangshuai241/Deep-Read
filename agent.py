@@ -957,8 +957,9 @@ class DeepReadAgent:
         self.llm.set_thinking_for_request(thinking)
 
     def _call_api_internal(self, silent=True):
-        """内部 API 调用，返回 (text, tool_summary)"""
+        """内部 API 调用，返回 (text, tool_results)"""
         last_tool_results = []
+        all_tool_results = []
 
         while True:
             # 保存最后一条用户输入用于失败恢复
@@ -1011,6 +1012,7 @@ class DeepReadAgent:
                     elapsed = int((time.time() - t0) * 1000)
                     log_tool_call(self.session_id, tname, tinp, result, elapsed)
                     last_tool_results.append((tc["id"], tname, result))
+                    all_tool_results.append((tc["id"], tname, result))
                     tool_summary.append(f"{tname}: {result[:100]}")
 
                 if self.llm.api_type == "anthropic":
@@ -1053,13 +1055,13 @@ class DeepReadAgent:
                     if reasoning_content:
                         msg["reasoning_content"] = reasoning_content
                 self.messages.append(msg)
-                self._update_meta(text, [], last_tool_results)
+                self._update_meta(text, [], all_tool_results)
                 try:
                     save_session(self.session_id, self.messages, self.meta)
                 except Exception:
                     pass
                 self._thinking_override = None
-                return text, last_tool_results
+                return text, all_tool_results
 
     def run(self):
         print(f"会话: {self.session_id}")

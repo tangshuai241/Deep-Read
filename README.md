@@ -2,7 +2,7 @@
 
 基于费曼学习法、苏格拉底提问和类比联想的阅读教练。帮助真正理解，而非替用户理解。
 
-**v2.5.1** — 单仓库双发行形态 · IM-first · 9 种阅读模式 · 概念卡基础包
+**v2.5.4** — IM-first · 9 种阅读模式 · EPUB 容错解析 · 飞书最终笔记附件回传
 
 ## 旧用户升级
 
@@ -111,6 +111,12 @@ python cli.py concepts scan           # 概念卡盘点
 python cli.py bot status              # 飞书 Bot 状态
 python cli.py bot start --reply       # 启动飞书 Bot
 python cli.py bot stop                # 停止飞书 Bot
+```
+
+飞书 Bot 默认会在最终笔记完成后，把生成的 `.md` 文件作为附件发回当前聊天。服务器部署时如需关闭：
+
+```bash
+export DEEPREAD_FEISHU_SEND_NOTE_FILE=0
 ```
 
 ## 四阶段精读流程

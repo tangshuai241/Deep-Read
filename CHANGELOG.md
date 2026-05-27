@@ -6,6 +6,19 @@
 
 ## 更新日志
 
+### 2026-05-28 — v2.5.4 飞书附件回传与重复问候抑制
+
+| 更新内容 | 说明 |
+|------|------|
+| 最终笔记附件回传 | 飞书 Agent 检测到 `write_note` 完成 `compiled/finalized` 后，自动把生成的 `.md` 笔记文件通过 Bot 发回当前聊天 |
+| 可配置开关 | 默认开启；服务器可设置 `DEEPREAD_FEISHU_SEND_NOTE_FILE=0` 关闭附件回传 |
+| 旧事件过滤 | 监听启动后跳过超过 5 分钟的积压消息，避免服务重启后补回“你好”欢迎菜单 |
+| 跨重启去重 | 新增 `state/feishu_bot.processed_ids.json` 记录近期 message_id，同一事件重放时不再重复回复 |
+| Bot 自消息过滤 | 跳过非文本、Bot 发送者、`cli_` 应用 ID、空内容和 DeepRead 自己发出的欢迎/帮助内容 |
+| Linux 锁判断 | `_pid_is_running()` 在 Linux 服务器改用 PID 探测，减少 systemd/宝塔环境下陈旧锁误判 |
+| Agent 工具结果 | 外部入口可拿到本轮全部工具结果，避免最终回复前又调用其他工具时漏发笔记附件 |
+| 测试覆盖 | `test_feishu_bot.py` 扩展至 20 个测试；全量 `108 passed` |
+
 ### 2026-05-28 — v2.5.3 EPUB 容错解析增强
 
 | 更新内容 | 说明 |

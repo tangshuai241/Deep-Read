@@ -48,24 +48,126 @@ LARK_CLI = _find_lark_cli()
 
 # ── 消息去重 ──
 RECENT_IDS = set()
+RECENT_ID_ORDER = []
+RECENT_IDS_LOADED = False
 MAX_RECENT = 200
-LOCK_PATH = Path(__file__).parent.parent / "state" / "feishu_bot.listen.lock"
+STATE_DIR = Path(__file__).parent.parent / "state"
+LOCK_PATH = STATE_DIR / "feishu_bot.listen.lock"
+PROCESSED_IDS_PATH = STATE_DIR / "feishu_bot.processed_ids.json"
+BOT_OPEN_ID = os.environ.get("FEISHU_BOT_OPEN_ID", "")
+AUTOSEND_FINAL_NOTE = os.environ.get("DEEPREAD_FEISHU_SEND_NOTE_FILE", "1") not in ("0", "false", "False")
+
+
+def _ensure_recent_ids_loaded():
+    """加载近期已处理消息 ID，避免 Bot 重启后重复回复同一条飞书事件。"""
+    global RECENT_IDS_LOADED
+    if RECENT_IDS_LOADED:
+        return
+    RECENT_IDS_LOADED = True
+    if not PROCESSED_IDS_PATH.exists():
+        return
+    try:
+        data = json.loads(PROCESSED_IDS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    ids = data.get("ids", data) if isinstance(data, dict) else data
+    if not isinstance(ids, list):
+        return
+    for mid in ids[-MAX_RECENT:]:
+        mid = str(mid)
+        if mid and mid not in RECENT_IDS:
+            RECENT_IDS.add(mid)
+            RECENT_ID_ORDER.append(mid)
+
+
+def _persist_recent_ids():
+    try:
+        PROCESSED_IDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PROCESSED_IDS_PATH.write_text(
+            json.dumps({"ids": RECENT_ID_ORDER[-MAX_RECENT:]}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 def is_duplicate(message_id):
     if not message_id:
         return False
+    _ensure_recent_ids_loaded()
+    message_id = str(message_id)
     if message_id in RECENT_IDS:
         return True
     RECENT_IDS.add(message_id)
+    RECENT_ID_ORDER.append(message_id)
     if len(RECENT_IDS) > MAX_RECENT:
-        RECENT_IDS.clear()  # 简单轮转
+        old_id = RECENT_ID_ORDER.pop(0)
+        RECENT_IDS.discard(old_id)
+    _persist_recent_ids()
     return False
+
+
+def is_recent_event(raw, max_age_seconds=300):
+    """跳过启动监听前积压太久的旧消息，避免 Bot 重启后补发招呼。"""
+    ts = raw.get("create_time") or raw.get("timestamp")
+    if not ts and isinstance(raw.get("event"), dict):
+        ev = raw["event"]
+        msg = ev.get("message", {}) if isinstance(ev.get("message"), dict) else {}
+        ts = msg.get("create_time") or ev.get("create_time") or raw.get("timestamp")
+    try:
+        event_ms = int(str(ts))
+        if event_ms < 10_000_000_000:
+            event_ms *= 1000
+    except (TypeError, ValueError):
+        return True
+    now_ms = int(time.time() * 1000)
+    return (now_ms - event_ms) <= max_age_seconds * 1000
+
+
+def is_user_text_message(raw, sender_id="", content=""):
+    """只处理用户发来的文本消息，跳过系统事件、Bot 自己和空内容。"""
+    message_type = raw.get("message_type", "")
+    sender_type = raw.get("sender_type", "")
+    if isinstance(raw.get("event"), dict):
+        ev = raw["event"]
+        msg = ev.get("message", {}) if isinstance(ev.get("message"), dict) else {}
+        message_type = message_type or msg.get("message_type", "")
+        sender = ev.get("sender", {}) if isinstance(ev.get("sender"), dict) else {}
+        sender_type = sender_type or sender.get("sender_type", "")
+
+    if message_type and message_type != "text":
+        return False
+    if sender_type and sender_type.lower() == "bot":
+        return False
+    if sender_id and sender_id.startswith("cli_"):
+        return False
+    if BOT_OPEN_ID and sender_id == BOT_OPEN_ID:
+        return False
+    text = str(content or "").strip()
+    if not text:
+        return False
+    auto_reply_prefixes = (
+        "你好～我是 DeepRead 阅读教练",
+        "支持的说法：",
+    )
+    if any(text.startswith(prefix) for prefix in auto_reply_prefixes):
+        return False
+    return True
 
 
 def _pid_is_running(pid):
     if not pid:
         return False
+    if os.name != "nt":
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except Exception:
+            return False
     try:
         result = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
@@ -182,12 +284,42 @@ def get_agent_for_user(user_id):
     return DeepReadAgent(user_id=user_id)
 
 
+def extract_note_paths_from_tools(tool_results):
+    """从 Agent 工具结果中提取最终笔记路径，优先 compiled/finalized。"""
+    paths = []
+    final_statuses = {"compiled", "finalized"}
+    for item in tool_results or []:
+        try:
+            _tid, tname, result = item
+        except ValueError:
+            continue
+        if tname != "write_note" or not result:
+            continue
+        try:
+            data = json.loads(result)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        status = data.get("status", "")
+        path = data.get("path", "")
+        if status in final_statuses and path and path.endswith(".md") and os.path.exists(path):
+            paths.append(path)
+
+    # 保序去重
+    deduped = []
+    for path in paths:
+        if path not in deduped:
+            deduped.append(path)
+    return deduped
+
+
 def handle_message(text, user_id="default"):
-    """处理一条消息，返回回复文本"""
+    """处理一条消息，返回 (回复文本, 最终笔记路径列表)"""
     agent = get_agent_for_user(user_id)
     text = normalize_user_text(text)
-    response, _tools = agent.process_message(text)
-    return response
+    response, tools = agent.process_message(text)
+    return response, extract_note_paths_from_tools(tools)
 
 
 def format_reply_text(text):
@@ -243,15 +375,45 @@ def send_reply(receive_id, text, target_type="user"):
         return False
 
 
+def send_file(receive_id, file_path, target_type="user"):
+    """通过飞书发送本地文件。"""
+    if not file_path or not os.path.exists(file_path):
+        print(f"  [文件不存在: {file_path}]")
+        return False
+    target_flag = "--chat-id" if target_type == "chat" else "--user-id"
+    print(f"  [发送文件: {file_path}, target={target_type}]")
+    try:
+        result = subprocess.run(
+            [LARK_CLI, "im", "+messages-send",
+             target_flag, receive_id,
+             "--file", file_path,
+             "--as", "bot"],
+            capture_output=True, text=True, timeout=60, encoding='utf-8',
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+        )
+        if result.returncode != 0:
+            print(f"  [文件发送失败: {result.stderr.strip()[:300]}]")
+            return False
+        return True
+    except Exception as e:
+        print(f"  [文件发送异常: {e}]")
+        return False
+
+
 def handle_once(text, user_id="default"):
     """单次处理模式"""
     agent = get_agent_for_user(user_id)
     print(f"用户: {user_id} | 会话: {agent.session_id}")
     print(f"后端: {agent.llm.name}/{agent.llm.model}")
     print()
-    response, _tools = agent.process_message(text)
+    response, tools = agent.process_message(text)
     print(response)
     print()
+    note_paths = extract_note_paths_from_tools(tools)
+    if note_paths:
+        print("最终笔记:")
+        for path in note_paths:
+            print(f"  {path}")
     print(f"会话已保存: {agent.session_id}")
     return response
 
@@ -346,6 +508,11 @@ def listen_events(max_events=0, reply_enabled=False):
                     print("  ⚠ sender_id 或 content 为空，请检查上方结构并调整解析")
                 continue
 
+            if not is_recent_event(raw):
+                ts = time.strftime("%H:%M:%S")
+                print(f"[{ts}] 跳过旧消息/积压事件")
+                continue
+
             # ── 消息去重 ──
             msg_id = raw.get("message_id", raw.get("id", ""))
             if is_duplicate(msg_id):
@@ -361,6 +528,11 @@ def listen_events(max_events=0, reply_enabled=False):
                 except json.JSONDecodeError:
                     pass
 
+            if not is_user_text_message(raw, sender_id=sender_id, content=content):
+                ts = time.strftime("%H:%M:%S")
+                print(f"[{ts}] 跳过非用户文本消息")
+                continue
+
             if not content:
                 continue
 
@@ -372,8 +544,9 @@ def listen_events(max_events=0, reply_enabled=False):
             qr, need_agent = quick_reply(content)
             if qr:
                 response = qr
+                note_paths = []
             else:
-                response = handle_message(content, sender_id)
+                response, note_paths = handle_message(content, sender_id)
 
             preview = response[:100].replace('\n', ' ') + "..." if len(response) > 100 else response
             label = "(快捷)" if qr else ""
@@ -386,6 +559,12 @@ def listen_events(max_events=0, reply_enabled=False):
                 ok = send_reply(target, response, target_type=target_type)
                 if ok:
                     print(f"  ✓ 已发送")
+                    if AUTOSEND_FINAL_NOTE and note_paths:
+                        for note_path in note_paths:
+                            if send_file(target, note_path, target_type=target_type):
+                                print(f"  ✓ 笔记文件已发送")
+                            else:
+                                print(f"  ✗ 笔记文件发送失败")
                 else:
                     print(f"  ✗ 发送失败")
 
