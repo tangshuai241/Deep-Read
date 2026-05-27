@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>系统设置</h1>
+
+<div class="setup-grid">
+  <div class="setup-card">
+    <h3>发行形态</h3>
+    <div class="setup-value">
+      {% if profile.get("name") == "trial" %}
+      <span class="badge trial">Trial 体验版</span>
+      {% elif profile.get("name") == "personal" %}
+      <span class="badge personal">Personal 完整版</span>
+      {% else %}
+      <span class="badge unknown">未设置</span>
+      {% endif %}
+    </div>
+    <p class="setup-desc">
+    {% if profile.get("name") == "trial" %}
+    IM-first · 手机为主入口 · 低依赖 · 无需 Obsidian
+    {% else %}
+    Obsidian 全链路 · LLM-Wiki · 概念卡 · 认知画像
+    {% endif %}
+    </p>
+  </div>
+
+  <div class="setup-card">
+    <h3>LLM</h3>
+    <div><span class="label">Provider:</span> {{ config.llm_provider or '未配置' }}</div>
+    <div><span class="label">Model:</span> {{ config.llm_model or '-' }}</div>
+  </div>
+
+  <div class="setup-card">
+    <h3>Obsidian</h3>
+    <div>
+      {% if config.obsidian %}
+      <span class="ok">已配置</span>
+      <div class="path-hint">{{ config.vault_dir }}</div>
+      {% else %}
+      <span class="muted">未配置</span>
+      {% if profile.get("name") == "trial" %}
+      <p class="setup-desc">Trial 版不强制 Obsidian，笔记保存在本地目录</p>
+      {% else %}
+      <p class="setup-desc">建议配置 Obsidian vault 以获得最佳体验</p>
+      {% endif %}
+      {% endif %}
+    </div>
+    <div><span class="label">笔记目录:</span> {{ config.notes_dir or '-' }}</div>
+  </div>
+
+  <div class="setup-card">
+    <h3>增强模块</h3>
+    <div>
+      <span class="label">LLM-Wiki:</span>
+      {% if config.wiki %}
+      <span class="ok">启用</span>
+      {% else %}
+      <span class="muted">关闭</span>
+      {% endif %}
+    </div>
+    <div>
+      <span class="label">认知画像:</span>
+      {% if config.cognition %}
+      <span class="ok">启用</span>
+      {% else %}
+      <span class="muted">关闭</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="setup-actions">
+  <a href="/doctor" class="btn">健康检查</a>
+  <span class="muted" style="font-size:12px">配置修改后需重启生效</span>
+</div>
+
+<style>
+.setup-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.setup-card { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.setup-card h3 { font-size: 14px; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+.setup-value { margin-bottom: 6px; }
+.setup-desc { font-size: 12px; color: #aaa; margin-top: 6px; }
+.path-hint { font-size: 11px; color: #aaa; word-break: break-all; margin-top: 2px; }
+.label { color: #aaa; font-size: 12px; margin-right: 4px; }
+.ok { color: #2e7d32; font-weight: 600; font-size: 13px; }
+.muted { color: #aaa; font-size: 13px; }
+.badge { padding: 2px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+.badge.trial { background: #e3f2fd; color: #1565c0; }
+.badge.personal { background: #e8f5e9; color: #2e7d32; }
+.badge.unknown { background: #eee; color: #888; }
+.setup-actions { display: flex; align-items: center; gap: 12px; }
+.btn { padding: 6px 14px; border: 1px solid #4a6fa5; border-radius: 6px; color: #4a6fa5; text-decoration: none; font-size: 13px; }
+.btn:hover { background: #f0f4ff; }
+</style>
+{% endblock %}

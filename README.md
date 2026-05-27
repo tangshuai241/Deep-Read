@@ -2,9 +2,40 @@
 
 基于费曼学习法、苏格拉底提问和类比联想的阅读教练。帮助真正理解，而非替用户理解。
 
-**v2.1.1** — 独立 Agent 版，多后端，不依赖 Claude Code。
+**v2.4.1** — 单仓库双发行形态 · IM-first · 8 种阅读模式 · 概念卡基础包
 
-## 快速开始
+## 旧用户升级
+
+从 v2.3 升级无需重新初始化。系统会自动将旧配置识别为 personal 完整版。如需显式声明：
+
+```yaml
+# 在 config.yaml 中添加
+profile:
+  name: personal
+```
+
+然后运行 `python cli.py doctor` 确认健康状态。
+
+## 最快启动 (Windows)
+
+```powershell
+# 1. 安装 Python 3.9+ → https://www.python.org/downloads/
+# 2. 打开 PowerShell 进入项目目录
+.\install.ps1
+
+# 3. 编辑 config.yaml 填写 Obsidian 路径和 API Key
+# 4. 启动
+.\start.ps1            # Web 控制台 → http://127.0.0.1:8765
+.\start-bot.ps1        # 飞书 Bot（可选）
+```
+
+**排障**：`python cli.py doctor` → `python cli.py doctor --deep`
+
+详细步骤见 [快速启动（新手版）](docs/快速启动-新手版.md)。
+
+---
+
+## 快速开始（终端/手动）
 
 ### 前提
 
@@ -24,7 +55,7 @@ pip install -r requirements.txt
 python init.py
 ```
 
-设置 API Key（按你选的）：
+设置 API Key：
 
 ```bash
 # DeepSeek
@@ -69,11 +100,17 @@ python agent.py --resume 20260525T173000
 ## 轻量命令（不需要 LLM）
 
 ```bash
-python cli.py progress           # 读书进度
-python cli.py review             # 随机复习一篇旧笔记
-python cli.py think              # 每天一个慢思考问题
-python cli.py search 关键词      # 搜索笔记
-python cli.py doctor             # 健康检查
+python cli.py progress                # 读书进度
+python cli.py review                  # 随机复习一篇旧笔记
+python cli.py think                   # 每天一个慢思考问题
+python cli.py search 关键词           # 搜索笔记
+python cli.py doctor                  # 健康检查（28项）
+python cli.py doctor --deep           # 深度检查（LLM/飞书连通性）
+python cli.py quality "path/note.md"  # 笔记质量检查
+python cli.py concepts scan           # 概念卡盘点
+python cli.py bot status              # 飞书 Bot 状态
+python cli.py bot start --reply       # 启动飞书 Bot
+python cli.py bot stop                # 停止飞书 Bot
 ```
 
 ## 四阶段精读流程

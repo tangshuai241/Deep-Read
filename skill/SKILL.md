@@ -30,6 +30,7 @@ description: >
 |------|------|
 | `extract_epub.py` | EPUB 解析 → 章节/小节结构化 JSON |
 | `state.py` | 状态管理（show/set/reset/history） |
+| `learning_contract.py` | 章节学习契约（知识地图/覆盖度/阶段通过检查） |
 | `write_note.py` | 笔记写入（create/update/append/finalize/compile） |
 | `search_vault.py` | Obsidian vault 搜索；支持 core/Wiki 混合检索和候选双链 |
 
@@ -45,10 +46,13 @@ description: >
 
 **阶段间状态锚定**：每进入新阶段，先重述"当前在讨论的核心概念是XXX，你目前的边界在YYY"，防止注意力漂移。
 
+**章节学习契约**：阶段0后建立 `learning_contract.json`，用 A/B/C/D 知识地图约束两端路线。每轮回答后更新契约，阶段切换前检查契约；详见 `references/learning-contract.md`。
+
 ### 阶段 0：初始化
 - 运行 `extract_epub.py --chapter N --json` 提取原文
 - 读 `reading-notes.md` 获取进度
 - 确认目标（理解/应用/批判/教学）
+- 建立学习契约：A_core 核心必过，B/C/D 抽样深化
 - 超过 8000 字 → 提示分次读
 - 详见 `references/dialogue-flow.md`
 
@@ -104,6 +108,7 @@ description: >
 - **笔记格式**：Obsidian 三段式 → `references/note-format.md`
 - **章节字段语义**：frontmatter 的 `章节` 固定为大章名（如 `7.字母"B"与数字"13"`），不要改成小节名；小节名放在文件名、正文标题或状态 `section`
 - **状态机**：每条消息前读状态，阶段切换时更新 → `references/fsm-spec.md`
+- **学习契约**：每轮对话围绕同一知识地图推进，阶段切换前检查 → `references/learning-contract.md`
 - **认知画像**：章节完成后更新，单次对话不触发 → `references/cognition-profile.md`
 - **微信读书**：可选增强，默认关闭 → `references/weread-api.md`
 - **对话细节**：四阶段完整流程 → `references/dialogue-flow.md`

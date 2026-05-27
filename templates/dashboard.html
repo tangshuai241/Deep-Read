@@ -16,20 +16,20 @@
   <a href="/notes" class="module-card">
     <span class="module-icon">笔记</span>
     <h3>笔记审阅</h3>
-    <p>预览 Obsidian 笔记、compile、检查格式</p>
+    <p>预览 Obsidian 笔记、compile、质量检查</p>
     <small>管理 {{ knowledge.book_notes or 0 }} 篇本书笔记</small>
+  </a>
+  <a href="/doctor" class="module-card">
+    <span class="module-icon">健康</span>
+    <h3>健康检查</h3>
+    <p>配置 · 依赖 · 路径 · LLM · 飞书 · 笔记质量</p>
+    <small>28 项检查 · 一键诊断</small>
   </a>
   <a href="/compare" class="module-card">
     <span class="module-icon">对比</span>
     <h3>对比实验</h3>
     <p>Claude Code vs 飞书 Agent 笔记质量对比</p>
     <small>引用数 · 字数 · 内链 · frontmatter · diff</small>
-  </a>
-  <a href="/doctor" class="module-card">
-    <span class="module-icon">健康</span>
-    <h3>健康检查</h3>
-    <p>配置 · 依赖 · 路径 · 模型 · 飞书状态</p>
-    <small>18 项检查 · 一键诊断</small>
   </a>
 </div>
 
@@ -68,12 +68,14 @@
 
 <div class="panels">
   <div class="panel">
-    <h2>系统状态</h2>
+    <h2>系统状态 <span style="font-weight:400;font-size:12px;color:#aaa;cursor:pointer" onclick="refreshStatus()">刷新</span></h2>
     <div class="sys-grid">
       <div><span class="sys-label">模型</span> {{ system.model }}</div>
       <div><span class="sys-label">后端</span> {{ system.provider }}</div>
-      <div><span class="sys-label">Doctor</span> 18/18 ✓</div>
+      <div><span class="sys-label">飞书 Bot</span> <span id="bot-status">检查中...</span></div>
       <div><span class="sys-label">笔记</span> {{ knowledge.book_notes or 0 }} 篇</div>
+      <div><span class="sys-label">Doctor</span> <span id="doctor-summary">—</span></div>
+      <div><span class="sys-label">质量</span> <span id="quality-summary">—</span></div>
     </div>
   </div>
 </div>
@@ -157,4 +159,44 @@
   .panels { grid-template-columns: 1fr; }
 }
 </style>
+
+<script>
+function refreshStatus() {
+  // Bot 状态
+  fetch('/api/bot/status').then(r => r.json()).then(d => {
+    var el = document.getElementById('bot-status');
+    var out = d.output || d.stderr || '';
+    if (out.indexOf('STALE') >= 0 || out.indexOf('陈旧') >= 0) {
+      el.innerHTML = '<span class="badge warn">锁文件异常</span>';
+    } else if (out.indexOf('OK') >= 0 || out.indexOf('运行中') >= 0) {
+      el.innerHTML = '<span class="badge ok">运行中</span>';
+    } else if (out.indexOf('未在运行') >= 0 || out.indexOf('无锁文件') >= 0) {
+      el.innerHTML = '<span class="badge stage-idle">未运行</span>';
+    } else {
+      el.innerHTML = '<span class="badge stage-idle">未知</span>';
+    }
+  }).catch(() => {
+    document.getElementById('bot-status').innerHTML = '<span class="badge stage-idle">检查失败</span>';
+  });
+
+  // Doctor 快速检查
+  fetch('/api/doctor').then(r => r.json()).then(d => {
+    var out = d.output || '';
+    var matchP = (out.match(/PASS/g) || []).length;
+    var matchW = (out.match(/WARN/g) || []).length;
+    var matchF = (out.match(/FAIL/g) || []).length;
+    var el = document.getElementById('doctor-summary');
+    var parts = [];
+    if (matchP) parts.push(matchP + ' PASS');
+    if (matchW) parts.push('<span style="color:#e65100">' + matchW + ' WARN</span>');
+    if (matchF) parts.push('<span style="color:#c62828">' + matchF + ' FAIL</span>');
+    el.innerHTML = parts.join(' ') || '—';
+  }).catch(() => {
+    document.getElementById('doctor-summary').textContent = '—';
+  });
+}
+
+// 页面加载时自动刷新
+refreshStatus();
+</script>
 {% endblock %}

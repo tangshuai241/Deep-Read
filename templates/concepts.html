@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>概念卡</h1>
+<button onclick="loadReport()" style="margin-bottom:12px">刷新</button>
+<pre id="output" class="doctor-output">加载中...</pre>
+
+<script>
+function loadReport() {
+  document.getElementById('output').textContent = '加载中...';
+  fetch('/api/concepts/report').then(r => r.json()).then(d => {
+    document.getElementById('output').textContent = d.output || '无输出';
+  });
+}
+loadReport();
+</script>
+{% endblock %}

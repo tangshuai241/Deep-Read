@@ -239,12 +239,88 @@ def extract_title_and_tags(filepath):
     return title, tags, book
 
 
+# ── 概念卡别名索引 ──
+
+def load_concept_index(config=None):
+    """扫描 vault_dir/概念（抽象概念）下的所有概念卡，建立别名→主标题索引。
+    返回 dict: {alias_lower: canonical_title}
+
+    优先级：用户 Obsidian 概念卡 > trial 基础包概念卡
+    """
+    config = config or load_config()
+    vault = get_vault_dir(config)
+    index = {}
+
+    # 先加载 trial 基础包（低优先级）
+    trial_concepts = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                   "profiles", "trial", "concepts")
+    if os.path.exists(trial_concepts):
+        _index_concept_dir(trial_concepts, index)
+
+    # 再加载用户 vault 概念卡（高优先级，覆盖 trial 同名卡）
+    concept_dir = os.path.join(vault, "概念（抽象概念）")
+    if os.path.exists(concept_dir):
+        _index_concept_dir(concept_dir, index)
+
+    return index
+
+
+def _index_concept_dir(directory, index):
+    """扫描一个概念卡目录，将主标题和别名添加到索引中。"""
+    for filepath in iter_markdown_files([directory]):
+        canonical = os.path.splitext(os.path.basename(filepath))[0]
+        if not canonical:
+            continue
+
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                fm = extract_frontmatter_block(f.read(3000))
+        except Exception:
+            fm = ""
+
+        aliases = extract_aliases_from_fm(fm)
+
+        index[canonical.lower()] = canonical
+        for alias in aliases:
+            key = alias.lower()
+            if key not in index:
+                index[key] = canonical
+
+
+def extract_aliases_from_fm(fm):
+    """从 frontmatter 提取所有别名。支持多行 YAML 列表和单行形式。"""
+    result = []
+    for key in ("aliases", "alias", "别名"):
+        # 尝试多行 YAML 列表: key:\n  - item1\n  - item2
+        multiline = re.search(
+            rf"^{re.escape(key)}:\s*\n((?:\s+-\s+.+\n?)+)", fm, re.M
+        )
+        if multiline:
+            for line in multiline.group(1).strip().split("\n"):
+                item = re.sub(r"^\s*-\s+", "", line.strip()).strip('"').strip("'")
+                if item and not item.startswith("-"):
+                    result.append(item)
+            continue
+        # 尝试单行: key: value 或 key: [a, b, c]
+        val = parse_frontmatter_value(fm, key)
+        if not val:
+            continue
+        if val.startswith("[") and val.endswith("]"):
+            for item in val[1:-1].split(","):
+                item = item.strip().strip('"').strip("'")
+                if item:
+                    result.append(item)
+        else:
+            result.append(val)
+    return result
+
+
 def read_doc(filepath, config=None):
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
     fm = extract_frontmatter_block(content)
     title, tags, book = extract_title_and_tags(filepath)
-    return {
+    result = {
         "path": filepath,
         "title": title,
         "book": book,
@@ -253,6 +329,9 @@ def read_doc(filepath, config=None):
         "wikilinks": extract_wikilinks(content),
         "content": content,
     }
+    if result["type"] == "concept_card":
+        result["aliases"] = extract_aliases_from_fm(fm)
+    return result
 
 
 def snippet_for(content, keyword, window=50):
@@ -371,6 +450,14 @@ def infer_link_type(doc, query=""):
     text = f"{doc.get('title', '')} {' '.join(doc.get('tags', []))} {doc.get('book', '')}"
     if doc.get("type") in ("wiki_hub", "wiki_book", "wiki_comparison", "wiki"):
         return "wiki_hub" if doc.get("type") == "wiki_hub" else "extension"
+    if doc.get("type") == "concept_card":
+        if any(term in text for term in ("系统1", "系统2", "确认偏误", "先相信后怀疑", "信念偏见", "最省力法则")):
+            return "core_mechanism"
+        if any(term in text for term in ("光环效应", "框架效应", "曝光效应", "熟悉感", "WYSIATI")):
+            return "manifestation"
+        if any(term in text for term in ("避免错觉", "独立判断", "反方", "清单", "核查", "慢思考")):
+            return "countermeasure"
+        return "core_mechanism"
     if doc.get("type") == "personal_thought":
         return "personal_experience"
     for link_type, terms in RELATION_HINTS:
@@ -425,7 +512,7 @@ def score_doc(doc, query_terms, query="", include_content=True):
     if doc_type == "wiki_hub":
         score += 7
     elif doc_type == "concept_card":
-        score += 5
+        score += 16
     elif doc_type == "reading_note":
         score += 3
     elif doc_type == "personal_thought":
@@ -469,7 +556,7 @@ def search_hybrid(query, scope="core", limit=20, include_wiki=True, config=None)
         if score <= 0:
             continue
         link_type = infer_link_type(doc, query=query)
-        results.append({
+        item = {
             "path": filepath,
             "title": doc["title"],
             "book": doc["book"],
@@ -481,7 +568,10 @@ def search_hybrid(query, scope="core", limit=20, include_wiki=True, config=None)
             "matched_terms": hits[:8],
             "reason": relation_reason(doc, link_type),
             "snippet": snippet_for(doc["content"], hits[0] if hits else query_terms[0] if query_terms else query),
-        })
+        }
+        if doc.get("aliases"):
+            item["aliases"] = doc["aliases"]
+        results.append(item)
 
     results.extend(virtual_link_candidates(query, query_terms, results))
     results.sort(key=lambda r: (r["score"], r["type"] == "wiki_hub"), reverse=True)
@@ -603,7 +693,7 @@ def choose_link_candidates(results, current_path="", max_body=5, max_related=5):
             continue
         used_titles.add(title)
         link_type = item.get("link_type", "extension")
-        if link_type in ("core_mechanism", "manifestation", "countermeasure", "wiki_hub") and len(body) < max_body:
+        if item.get("type") == "concept_card" and link_type in ("core_mechanism", "manifestation", "countermeasure") and len(body) < max_body:
             body.append(item)
         elif len(related) < max_related:
             related.append(item)
@@ -631,7 +721,7 @@ def choose_link_candidates(results, current_path="", max_body=5, max_related=5):
 def suggest_links(note_path, scope="core", limit=20, include_wiki=True, config=None):
     config = config or load_config()
     query, _ = read_note_query(note_path)
-    results = search_hybrid(query, scope=scope, limit=limit, include_wiki=include_wiki, config=config)
+    results = search_hybrid(query, scope=scope, limit=max(limit, 40), include_wiki=include_wiki, config=config)
     grouped = choose_link_candidates(results, current_path=note_path)
     grouped["query"] = query[:1000]
     return grouped

@@ -4,6 +4,34 @@
 
 ---
 
+## 更新日志
+
+### 2026-05-27 16:41:31 +08:00 — Obsidian 正文概念链接与排版优化
+
+| 更新内容 | 说明 |
+|------|------|
+| 正文概念链接优先 | `我的理解` / `让我想到` 的正文内链只链接 `概念（抽象概念）` 下的概念卡，例如 `[[光环效应]]` |
+| 延伸阅读边界 | 读书笔记、我的思考、Wiki 枢纽不再进入正文内链，统一放入 `### 相关旧笔记 / 延伸阅读` |
+| 概念卡召回增强 | `search_vault.py` 提高 `concept_card` 权重，`suggest_links` 扩大候选池，避免已有概念卡被读书笔记挤掉 |
+| 重点句加粗 | `write_note.py compile` 会给 `我的理解` / `让我想到` 中一级 bullet 的第一句适度加粗，作为 Obsidian 回看锚点 |
+| 规则同步 | `skill/references/note-format.md` 明确“概念卡进正文，旧笔记/我的思考进延伸阅读”的 Obsidian 链接规则，并同步到 Claude Code skill |
+| 测试覆盖 | 补充正文只链接概念卡、非概念候选进入延伸阅读、重点句加粗的回归测试 |
+
+### 2026-05-26 23:27:08 +08:00 — 章节学习契约与两端对齐
+
+| 更新内容 | 说明 |
+|------|------|
+| 新增学习契约层 | 新增 `scripts/learning_contract.py`，支持 `init/show/update/check/report`，用于记录 A/B/C/D 知识地图、理解证据、阶段事件和笔记沉淀 |
+| Agent 工具接入 | `agent.py` 新增 `learning_contract` 工具；系统提示加载 `learning-contract.md`，阶段切换前可检查学习契约 |
+| 多用户隔离 | Agent 调用 `state.py` 和 `learning_contract.py` 时携带 `user_id`，飞书多用户不会共用同一份契约 |
+| CLI 入口 | `cli.py` 新增 `contract` 命令，并把 `learning_contract.py` 纳入 doctor 脚本自检 |
+| Skill 规则同步 | 新增 `skill/references/learning-contract.md`，更新 `SKILL.md` 与 `dialogue-flow.md`，并同步到 `C:\Users\唐帅\.claude\skills\deep-read` |
+| 阶段通过标准 | 阶段1要求 A 类核心点 80% 覆盖；阶段2要求深挖、边界/反例、应用追问；阶段3要求旧笔记关联和个人联想；阶段4输出覆盖报告 |
+| 测试覆盖 | 新增 `tests/test_learning_contract.py`；补充 Agent 工具参数顺序回归测试 |
+| 验证结果 | `python -m pytest -q`：57/57 全绿 |
+
+---
+
 ## 起点
 
 用户唐帅有一套个人深度阅读工作流：

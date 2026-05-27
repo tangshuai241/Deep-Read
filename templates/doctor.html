@@ -1,14 +1,70 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>健康检查</h1>
-<button onclick="runDoctor()">重新检查</button>
+
+<div class="doctor-actions">
+  <button class="btn-primary" onclick="runDoctor(false)">普通检查</button>
+  <button class="btn-deep" onclick="runDoctor(true)">深度检查</button>
+  <span id="status-text" style="margin-left:12px;font-size:13px;color:#888"></span>
+</div>
+
+<div id="summary" class="doctor-summary" style="display:none"></div>
 <pre id="output" class="doctor-output">点击按钮开始检查...</pre>
 
+<style>
+.doctor-actions { margin-bottom: 16px; display: flex; align-items: center; }
+.btn-primary, .btn-deep {
+  padding: 6px 16px; border: none; border-radius: 6px; cursor: pointer;
+  font-size: 14px; margin-right: 8px;
+}
+.btn-primary { background: #4a6fa5; color: #fff; }
+.btn-primary:hover { background: #3a5a85; }
+.btn-deep { background: #6a1b9a; color: #fff; }
+.btn-deep:hover { background: #5a0b8a; }
+.doctor-output {
+  background: #1e1e2e; color: #c0c0d0; border-radius: 8px;
+  padding: 16px; font-size: 13px; white-space: pre-wrap;
+  max-height: 600px; overflow-y: auto;
+}
+.doctor-summary {
+  background: #fff; border-radius: 8px; padding: 12px 16px;
+  margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  font-size: 13px;
+}
+.summary-pass { color: #2e7d32; font-weight:600; }
+.summary-warn { color: #e65100; font-weight:600; }
+.summary-fail { color: #c62828; font-weight:600; }
+</style>
+
 <script>
-function runDoctor() {
-  document.getElementById('output').textContent = '检查中...';
-  fetch('/api/doctor').then(r => r.json()).then(d => {
-    document.getElementById('output').textContent = d.output || '无输出';
+function runDoctor(deep) {
+  var el = document.getElementById('output');
+  var st = document.getElementById('status-text');
+  var sm = document.getElementById('summary');
+  el.textContent = deep ? '深度检查中（可能需 10-20 秒）...' : '检查中...';
+  st.textContent = '';
+
+  var url = '/api/doctor' + (deep ? '?deep=1' : '');
+  fetch(url).then(r => r.json()).then(d => {
+    st.textContent = d.ok ? '' : '(有失败项)';
+    el.textContent = d.output || '无输出';
+    sm.style.display = 'block';
+
+    var out = d.output || '';
+    var pass = (out.match(/PASS/g) || []).length;
+    var warn = (out.match(/WARN/g) || []).length;
+    var fail = (out.match(/FAIL/g) || []).length;
+
+    var html = '<strong>检查结果: </strong>';
+    html += '<span class="summary-pass">' + pass + ' PASS</span> ';
+    if (warn) html += '<span class="summary-warn">' + warn + ' WARN</span> ';
+    if (fail) html += '<span class="summary-fail">' + fail + ' FAIL</span> ';
+    if (!fail && !warn) html += '全部通过';
+    html += (deep ? ' (深度检查)' : ' (普通检查)');
+    sm.innerHTML = html;
+  }).catch(function(e) {
+    el.textContent = '检查失败: ' + e;
+    st.textContent = '';
   });
 }
 </script>

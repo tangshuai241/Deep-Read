@@ -1,0 +1,57 @@
+# DeepRead Trial 配置样例
+# 体验版：IM-first · 低依赖 · 不强制 Obsidian/Wiki
+
+user:
+  name: "读者"
+  preferred_name: "读者"
+
+paths:
+  books_dir: "./books"
+  vault_dir: ""                          # 可选，不填则只用 Markdown 输出
+  notes_dir: "./notes"                   # 笔记输出到本地
+  state_dir: "./state"
+  reading_notes: "./reading-notes.md"
+  cognition_profile: "./cognition_profile.json"
+  wiki_integration_dir: ""
+
+note:
+  template: "obsidian-three-section"
+  use_wikilinks: false                   # 无 Obsidian 时关闭
+  date_in_frontmatter: false
+
+reading:
+  max_words_per_session: 8000
+  auto_advance_stage: false
+
+integrations:
+  weread:
+    enabled: false
+  obsidian:
+    enabled: false                       # trial 默认不启用 Obsidian
+  wiki:
+    enabled: false                       # trial 默认不启用 LLM-Wiki
+
+cognition:
+  enabled: false
+
+advanced:
+  log_level: "info"
+  backup_notes: true
+
+llm:
+  provider: ""                           # deepseek / anthropic / openai
+  model: "deepseek-v4-pro"
+  api_key: ""                            # 留空从环境变量读取
+  base_url: ""
+  thinking: "auto"
+
+# Trial 特性
+profile:
+  name: trial
+  default_modes:                         # trial 只开放 4 个常用模式
+    - concept_deep_read
+    - proposition_dialogue
+    - method_conversion
+    - exam_mastery
+  concept_pack: "profiles/trial/concepts"  # 基础概念卡路径
+  im_first: true

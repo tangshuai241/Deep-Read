@@ -343,6 +343,63 @@ def doctor_page(request: Request):
     return render("doctor.html", {"request": request})
 
 
+@app.get("/setup", response_class=HTMLResponse)
+def setup_page(request: Request):
+    config = load_config()
+    profile = config.get("profile", {})
+    return render("setup.html", {
+        "request": request,
+        "profile": profile,
+        "config": {
+            "llm_provider": config.get("llm", {}).get("provider", ""),
+            "llm_model": config.get("llm", {}).get("model", ""),
+            "obsidian": bool(config.get("paths", {}).get("vault_dir", "")),
+            "wiki": config.get("integrations", {}).get("wiki", {}).get("enabled", False),
+            "cognition": config.get("cognition", {}).get("enabled", False),
+            "notes_dir": config.get("paths", {}).get("notes_dir", ""),
+            "vault_dir": config.get("paths", {}).get("vault_dir", ""),
+        }
+    })
+
+
+@app.get("/modes", response_class=HTMLResponse)
+def modes_page(request: Request):
+    return render("modes.html", {"request": request})
+
+
+@app.get("/concepts", response_class=HTMLResponse)
+def concepts_page(request: Request):
+    return render("concepts.html", {"request": request})
+
+
+@app.get("/api/profile")
+def api_profile():
+    config = load_config()
+    return {"profile": config.get("profile", {}), "integrations": config.get("integrations", {})}
+
+
+@app.get("/api/modes")
+def api_modes():
+    import subprocess
+    r = subprocess.run(
+        [sys.executable, str(BASE / "cli.py"), "modes", "list"],
+        capture_output=True, text=True, encoding="utf-8", timeout=10,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+    )
+    return {"output": r.stdout}
+
+
+@app.get("/api/concepts/report")
+def api_concepts_report():
+    import subprocess
+    r = subprocess.run(
+        [sys.executable, str(BASE / "cli.py"), "concepts", "report"],
+        capture_output=True, text=True, encoding="utf-8", timeout=15,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+    )
+    return {"output": r.stdout}
+
+
 # ── API ────────────────────────────────────────────
 @app.post("/api/notes/compile")
 def api_compile(data: dict):
@@ -362,14 +419,84 @@ def api_state():
     return load_state()
 
 @app.get("/api/doctor")
-def api_doctor():
+def api_doctor(deep: int = Query(0)):
+    import subprocess
+    cmd = [sys.executable, str(BASE / "cli.py"), "doctor"]
+    if deep:
+        cmd.append("--deep")
+    r = subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", timeout=30,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+    )
+    return {"ok": r.returncode == 0, "output": r.stdout, "deep": bool(deep)}
+
+
+# ── Bot API ──
+def _run_bot_cmd(args):
+    """内部调用 python cli.py bot <args>"""
+    import subprocess
+    cmd = [sys.executable, str(BASE / "cli.py"), "bot"] + args
+    r = subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", timeout=15,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"}
+    )
+    return {"ok": r.returncode == 0, "output": r.stdout, "stderr": r.stderr}
+
+
+@app.get("/api/bot/status")
+def api_bot_status():
+    return _run_bot_cmd(["status"])
+
+
+@app.post("/api/bot/start")
+def api_bot_start(data: dict = None):
+    data = data or {}
+    args = ["start"]
+    if data.get("reply", True):
+        args.append("--reply")
+    notes_dir = data.get("notes_dir", "")
+    if notes_dir:
+        args.extend(["--notes-dir", notes_dir])
+    return _run_bot_cmd(args)
+
+
+@app.post("/api/bot/stop")
+def api_bot_stop(data: dict = None):
+    data = data or {}
+    args = ["stop"]
+    if data.get("force"):
+        args.append("--force")
+    return _run_bot_cmd(args)
+
+
+@app.post("/api/bot/restart")
+def api_bot_restart(data: dict = None):
+    data = data or {}
+    args = ["restart"]
+    if data.get("reply", True):
+        args.append("--reply")
+    notes_dir = data.get("notes_dir", "")
+    if notes_dir:
+        args.extend(["--notes-dir", notes_dir])
+    if data.get("force"):
+        args.append("--force")
+    return _run_bot_cmd(args)
+
+
+@app.get("/api/quality")
+def api_quality(path: str = Query("")):
+    if not path or not os.path.exists(path):
+        return JSONResponse({"ok": False, "error": "路径不存在"}, 400)
     import subprocess
     r = subprocess.run(
-        [sys.executable, str(BASE / "cli.py"), "doctor"],
+        [sys.executable, str(SCRIPTS / "note_quality.py"), "--path", path, "--json"],
         capture_output=True, text=True, encoding="utf-8", timeout=15,
         env={**os.environ, "PYTHONIOENCODING": "utf-8"}
     )
-    return {"ok": r.returncode == 0, "output": r.stdout}
+    try:
+        return {"ok": r.returncode == 0, "result": json.loads(r.stdout)}
+    except json.JSONDecodeError:
+        return {"ok": False, "error": r.stdout[:500]}
 
 @app.post("/api/compare/diff")
 def api_compare(data: dict):

@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent import (LLMProvider, save_session, load_session, find_session_for_user,
                     list_sessions, SESSION_DIR, split_thinking_directive,
-                    should_enable_auto_thinking)
+                    should_enable_auto_thinking, execute_tool)
 
 
 def setup_module():
@@ -170,6 +170,23 @@ def test_auto_thinking_router():
     assert should_enable_auto_thinking("搜索 系统1") is False
     assert should_enable_auto_thinking("总结我的回答，并指出我的盲点") is True
     assert should_enable_auto_thinking("继续", stage="socratic") is True
+
+
+def test_learning_contract_tool_passes_user_before_subcommand(monkeypatch):
+    captured = {}
+
+    def fake_run_script(name, *args):
+        captured["name"] = name
+        captured["args"] = args
+        return "{}"
+
+    import agent
+    monkeypatch.setattr(agent, "run_script", fake_run_script)
+
+    execute_tool("learning_contract", {"action": "show"}, user_id="ou_test")
+
+    assert captured["name"] == "learning_contract.py"
+    assert captured["args"][:4] == ("--user", "ou_test", "--json", "show")
 
 
 def test_openai_replays_reasoning_content(monkeypatch):

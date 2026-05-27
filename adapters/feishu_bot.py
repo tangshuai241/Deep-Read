@@ -49,6 +49,7 @@ LARK_CLI = _find_lark_cli()
 # ── 消息去重 ──
 RECENT_IDS = set()
 MAX_RECENT = 200
+LOCK_PATH = Path(__file__).parent.parent / "state" / "feishu_bot.listen.lock"
 
 
 def is_duplicate(message_id):
@@ -60,6 +61,58 @@ def is_duplicate(message_id):
     if len(RECENT_IDS) > MAX_RECENT:
         RECENT_IDS.clear()  # 简单轮转
     return False
+
+
+def _pid_is_running(pid):
+    if not pid:
+        return False
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=5,
+        )
+        return str(pid) in result.stdout
+    except Exception:
+        return False
+
+
+def acquire_listen_lock(reply=False, notes_dir=""):
+    """防止同时启动多个 listen --reply 导致飞书重复回复。"""
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if LOCK_PATH.exists():
+        try:
+            data = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
+            old_pid = int(data.get("pid", 0))
+        except Exception:
+            old_pid = 0
+        if _pid_is_running(old_pid):
+            print(f"已有飞书监听在运行 (pid={old_pid})，本次退出，避免重复回复。")
+            print(f"如确认旧进程已失效，可删除锁文件: {LOCK_PATH}")
+            return False
+        try:
+            LOCK_PATH.unlink()
+        except OSError:
+            pass
+
+    LOCK_PATH.write_text(json.dumps({
+        "pid": os.getpid(),
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "cmd": " ".join(sys.argv),
+        "reply": reply,
+        "notes_dir": notes_dir,
+    }, ensure_ascii=False), encoding="utf-8")
+    return True
+
+
+def release_listen_lock():
+    try:
+        if LOCK_PATH.exists():
+            data = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
+            if int(data.get("pid", 0)) == os.getpid():
+                LOCK_PATH.unlink()
+    except Exception:
+        pass
 
 
 # ── 轻量快捷回复 ──
@@ -205,6 +258,9 @@ def handle_once(text, user_id="default"):
 
 def listen_events(max_events=0, reply_enabled=False):
     """监听飞书 IM 消息事件"""
+    if not acquire_listen_lock(reply=reply_enabled, notes_dir=os.environ.get("DEEPREAD_NOTES_DIR", "")):
+        return
+
     print("飞书事件监听启动")
     print(f"回复模式: {'开启' if reply_enabled else '关闭（仅打印）'}")
     if max_events:
@@ -340,6 +396,7 @@ def listen_events(max_events=0, reply_enabled=False):
         print("\n监听已停止")
     finally:
         proc.terminate()
+        release_listen_lock()
 
     print(f"\n共处理 {event_count} 条事件")
 

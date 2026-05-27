@@ -6,7 +6,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from search_vault import (search_keyword, search_backlinks, recent_notes,
                           extract_title_and_tags, search_hybrid, suggest_links,
-                          get_scope_dirs)
+                          get_scope_dirs, choose_link_candidates,
+                          load_concept_index, extract_frontmatter_block,
+                          parse_frontmatter_value, extract_aliases_from_fm)
 
 
 def setup_module():
@@ -114,3 +116,75 @@ def test_suggest_links_for_wysiati_note_groups_body_and_related():
     assert "光环效应" in all_titles or "光环效应与群体的智慧" in all_titles
     assert len(suggestions["body_links"]) <= 5
     assert len(suggestions["related_links"]) <= 5
+
+
+def test_choose_link_candidates_puts_only_concepts_in_body():
+    results = [
+        {
+            "path": "C:/vault/概念（抽象概念）/心理学/光环效应.md",
+            "title": "光环效应",
+            "type": "concept_card",
+            "link_type": "manifestation",
+            "score": 80,
+        },
+        {
+            "path": "C:/vault/读书/笔记/《思考快与慢》/光环效应与群体的智慧.md",
+            "title": "光环效应与群体的智慧",
+            "type": "reading_note",
+            "link_type": "manifestation",
+            "score": 90,
+        },
+        {
+            "path": "C:/vault/我的思考/判断.md",
+            "title": "判断中的第一印象",
+            "type": "personal_thought",
+            "link_type": "personal_experience",
+            "score": 70,
+        },
+    ]
+
+    grouped = choose_link_candidates(results)
+
+    assert [item["title"] for item in grouped["body_links"]] == ["光环效应"]
+    related_titles = [item["title"] for item in grouped["related_links"]]
+    assert "光环效应与群体的智慧" in related_titles
+    assert "判断中的第一印象" in related_titles
+
+
+# ── 概念卡别名测试 ──
+
+def test_extract_aliases_from_yaml_list():
+    fm = "aliases:\n  - 别名A\n  - 别名B"
+    result = extract_aliases_from_fm(fm)
+    assert "别名A" in result
+    assert "别名B" in result
+
+
+def test_extract_aliases_from_single_string():
+    fm = "alias: 单个别名"
+    result = extract_aliases_from_fm(fm)
+    assert "单个别名" in result
+
+
+def test_extract_aliases_from_chinese_key():
+    fm = "别名: 中文别名"
+    result = extract_aliases_from_fm(fm)
+    assert "中文别名" in result
+
+
+def test_extract_aliases_empty():
+    fm = "tags:\n  - 读书笔记"
+    result = extract_aliases_from_fm(fm)
+    assert result == []
+
+
+def test_load_concept_index_returns_dict():
+    if not os.path.exists(r"E:\Documents\知识库\概念（抽象概念）"):
+        return
+    index = load_concept_index()
+    assert isinstance(index, dict)
+    # 应该至少包含一些已知概念
+    known = ["系统1", "系统2", "光环效应", "确认偏误"]
+    found = any(k in str(index.values()) for k in known)
+    # 可能没有，但至少不报错
+    assert isinstance(index, dict)

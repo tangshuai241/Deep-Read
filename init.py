@@ -109,9 +109,36 @@ def validate_path(path_text, must_exist=False):
     return os.path.abspath(path)
 
 
+def load_profile_defaults(profile_name):
+    """加载 profile 默认配置，不存在则返回空。"""
+    profile_dir = Path(__file__).parent / "profiles" / profile_name
+    example_yaml = profile_dir / "config.example.yaml"
+    if not example_yaml.exists():
+        return {}
+    try:
+        import yaml
+        with open(example_yaml, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+
 def main():
+    import argparse
+    deepread_dir = Path(__file__).parent
+    config_path = deepread_dir / "config.yaml"
+
+    parser = argparse.ArgumentParser(description="DeepRead 初始化向导")
+    parser.add_argument("--profile", default="", choices=["trial", "personal"],
+                        help="发行形态: trial 体验版 / personal 完整版")
+    args, _ = parser.parse_known_args()
+    profile_name = getattr(args, "profile", "") or ""
+
     print()
-    print(bold("=== DeepRead 初始化向导 ==="))
+    if profile_name:
+        print(bold(f"=== DeepRead 初始化向导 [{profile_name.upper()}] ==="))
+    else:
+        print(bold("=== DeepRead 初始化向导 ==="))
     print()
 
     # 环境检查
@@ -123,15 +150,36 @@ def main():
             sys.exit(1)
 
     # 检测现有配置
-    deepread_dir = Path(__file__).parent
-    config_path = deepread_dir / "config.yaml"
     if config_path.exists():
         print(f"\n检测到已有配置文件: {config_path}")
         if not prompt_yesno("是否覆盖？", default=False):
             print("已取消。要重新配置请删除 config.yaml 后重试。")
             return
 
-    config = {"user": {}, "paths": {}, "note": {}, "reading": {}, "integrations": {}, "cognition": {}, "advanced": {}}
+    # 选择 profile（如果未通过 --profile 指定）
+    if not profile_name:
+        profile_choice = prompt_choice("选择发行形态", [
+            "trial (体验版：手机 IM 主路径，无需 Obsidian)",
+            "personal (完整版：Obsidian + Wiki + 概念卡全链路)"
+        ], default=1)
+        profile_name = profile_choice.split()[0]
+
+    # 加载 profile 默认配置
+    profile_defaults = load_profile_defaults(profile_name)
+    is_trial = (profile_name == "trial")
+
+    config = {"user": {}, "paths": {}, "note": {}, "reading": {}, "integrations": {}, "cognition": {},
+              "advanced": {}, "llm": {}, "profile": {"name": profile_name}}
+
+    # 使用 profile 默认值
+    if profile_defaults:
+        for section in ("note", "reading", "integrations", "cognition", "advanced", "profile"):
+            if section in profile_defaults:
+                config[section].update(profile_defaults[section])
+
+    default_vault = get_default_vault()
+    default_books = os.path.dirname(str(deepread_dir))
+    state_dir = os.path.join(str(deepread_dir), "state")
 
     # 1. 用户信息
     print(f"\n{bold('1. 基本信息')}")
@@ -140,57 +188,66 @@ def main():
 
     # 2. 路径
     print(f"\n{bold('2. 路径设置')} ({get_platform()})")
-    default_vault = get_default_vault()
-    vault_dir = prompt("Obsidian vault 目录", default_vault)
-    config["paths"]["vault_dir"] = validate_path(vault_dir) or vault_dir
-    config["paths"]["notes_dir"] = prompt("笔记保存目录", os.path.join(config["paths"]["vault_dir"], "读书", "笔记"))
+    if is_trial:
+        vault_dir = prompt("Obsidian vault 目录（可选，留空跳过）", "")
+        config["paths"]["vault_dir"] = validate_path(vault_dir) if vault_dir else ""
+        notes_default = os.path.join(str(deepread_dir), "notes")
+        config["paths"]["notes_dir"] = prompt("笔记保存目录", notes_default)
+        config["paths"]["wiki_integration_dir"] = ""
+    else:
+        vault_dir = prompt("Obsidian vault 目录", default_vault)
+        config["paths"]["vault_dir"] = validate_path(vault_dir) or vault_dir
+        config["paths"]["notes_dir"] = prompt("笔记保存目录",
+            os.path.join(config["paths"]["vault_dir"], "读书", "笔记"))
+        config["paths"]["wiki_integration_dir"] = os.path.join(
+            config["paths"]["vault_dir"], "读书", "笔记", "📚 LLM-Wiki 整合")
 
-    default_books = os.path.dirname(str(deepread_dir))
     config["paths"]["books_dir"] = prompt("EPUB 书籍目录", default_books)
-
-    state_dir = os.path.join(str(deepread_dir), "state")
     config["paths"]["state_dir"] = prompt("状态文件目录", state_dir)
-
     config["paths"]["reading_notes"] = os.path.join(str(deepread_dir), "reading-notes.md")
     config["paths"]["cognition_profile"] = os.path.join(str(deepread_dir), "cognition_profile.json")
-    config["paths"]["wiki_integration_dir"] = os.path.join(config["paths"]["vault_dir"], "读书", "笔记", "📚 LLM-Wiki 整合")
 
-    # 3. 笔记格式
-    print(f"\n{bold('3. 笔记格式')}")
-    template = prompt_choice("笔记模板", [
-        "obsidian-three-section (Obsidian 三段式，推荐)",
-        "plain (纯 Markdown)",
-        "cornell (康奈尔笔记)",
-        "zettelkasten (卡片盒笔记)"
+    # 3. 笔记格式（trial: 跳过，用默认；personal: 交互式）
+    if is_trial:
+        config["note"]["use_wikilinks"] = config["paths"]["vault_dir"] != ""
+        config["integrations"]["obsidian"]["enabled"] = bool(config["paths"]["vault_dir"])
+    else:
+        print(f"\n{bold('3. 笔记格式')}")
+        template = prompt_choice("笔记模板", [
+            "obsidian-three-section (Obsidian 三段式，推荐)",
+            "plain (纯 Markdown)"
+        ], default=1)
+        config["note"]["template"] = template.split()[0]
+        config["note"]["use_wikilinks"] = prompt_yesno("使用 Obsidian wikilinks [[ ]]", True)
+        config["note"]["date_in_frontmatter"] = prompt_yesno("在笔记 frontmatter 中加日期", False)
+        config["integrations"]["wiki"]["enabled"] = prompt_yesno("启用 LLM-Wiki 集成？", True)
+        config["cognition"]["enabled"] = prompt_yesno("启用认知画像？", False)
+
+    # LLM 配置
+    print(f"\n{bold('LLM 配置')}")
+    print("  DeepRead 需要 LLM API 来驱动精读对话。")
+    print("  支持的 provider: deepseek / anthropic / openai")
+
+    provider = prompt_choice("选择 LLM provider", [
+        "deepseek (DeepSeek，推荐)",
+        "anthropic (Anthropic Claude)",
+        "openai (OpenAI / 兼容接口)"
     ], default=1)
-    template_key = template.split()[0]
-    config["note"]["template"] = template_key
-    config["note"]["use_wikilinks"] = prompt_yesno("使用 Obsidian wikilinks [[ ]]", True)
-    config["note"]["date_in_frontmatter"] = prompt_yesno("在笔记 frontmatter 中加日期", False)
+    provider_key = provider.split()[0]
 
-    # 4. 阅读设置
-    print(f"\n{bold('4. 阅读偏好')}")
-    config["reading"]["max_words_per_session"] = 8000
-    config["reading"]["auto_advance_stage"] = False
+    config["llm"]["provider"] = provider_key
 
-    # 5. 集成
-    print(f"\n{bold('5. 外部集成')}")
-    config["integrations"]["weread"] = {
-        "enabled": prompt_yesno("启用微信读书集成？", False),
-        "api_key_env": "WEREAD_API_KEY",
-        "api_entry": "https://i.weread.qq.com/api/agent/gateway"
-    }
-    config["integrations"]["obsidian"] = {"enabled": True}
-    config["integrations"]["wiki"] = {"enabled": prompt_yesno("启用 LLM-Wiki 集成？", True)}
+    model_map = {"deepseek": "deepseek-v4-pro", "anthropic": "claude-sonnet-4-6", "openai": "gpt-4o"}
+    config["llm"]["model"] = prompt("模型名", model_map.get(provider_key, ""))
 
-    # 6. 认知画像
-    print(f"\n{bold('6. 认知画像')}")
-    config["cognition"]["enabled"] = prompt_yesno("启用认知画像？（记录思维模式，让AI更懂你）", False)
-    config["cognition"]["update_frequency"] = "chapter_end"
+    api_key = prompt("API Key（留空则从环境变量读取）", "")
+    if api_key:
+        masked = api_key[:6] + "..." if len(api_key) > 6 else "***"
+        print(f"  API Key 已设置: {masked}")
+    config["llm"]["api_key"] = api_key
 
-    # 7. 高级
-    config["advanced"]["log_level"] = "info"
-    config["advanced"]["backup_notes"] = True
+    config["llm"]["base_url"] = prompt("自定义 base_url（OpenAI 兼容接口/中转站用，留空跳过）", "")
+    config["llm"]["thinking"] = "auto"
 
     # 写入配置
     import yaml
@@ -198,22 +255,47 @@ def main():
 
     with open(config_path, 'w', encoding='utf-8') as f:
         f.write("# DeepRead 配置文件\n")
+        f.write(f"# Profile: {profile_name}\n")
         f.write("# 由 deepread init 生成\n")
         f.write("# 可手动编辑，重新运行 init.py 会覆盖\n\n")
         f.write(yaml_text)
 
-    # 创建目录
-    for d in [config["paths"]["state_dir"], config["paths"]["notes_dir"]]:
-        os.makedirs(d, exist_ok=True)
-    os.makedirs(os.path.join(config["paths"]["state_dir"], "default", "history"), exist_ok=True)
+    # 创建核心目录
+    vault = config["paths"]["vault_dir"]
+    core_dirs = [config["paths"]["notes_dir"]]
+    if vault:
+        core_dirs.extend([
+            os.path.join(vault, "概念（抽象概念）"),
+            os.path.join(vault, "我的思考"),
+        ])
+    if config["paths"].get("wiki_integration_dir"):
+        core_dirs.append(config["paths"]["wiki_integration_dir"])
+    for d in core_dirs:
+        if d:
+            try:
+                os.makedirs(d, exist_ok=True)
+            except OSError:
+                pass
+
+    state_d = config["paths"]["state_dir"]
+    os.makedirs(os.path.join(state_d, "default", "history"), exist_ok=True)
+    os.makedirs(os.path.join(state_d, "sessions"), exist_ok=True)
+    os.makedirs(os.path.join(str(deepread_dir), "logs"), exist_ok=True)
 
     print(f"\n{green('✓ 配置已保存到:')} {config_path}")
-    print(f"{green('✓ 目录已创建')}")
+    print(f"{green('✓ Profile:')} {profile_name}")
+    print(f"{green('✓ 核心目录已创建')}")
     print()
     print(bold("快速开始:"))
-    print(f"  1. 把 EPUB 书籍放到: {config['paths']['books_dir']}")
-    print(f"  2. 在 Claude Code 中输入: /deepread 读《书名》第1章")
-    print(f"  3. 笔记将保存到: {config['paths']['notes_dir']}")
+    if is_trial:
+        print(f"  1. 配置飞书 Bot（见 docs/快速启动-新手版.md）")
+        print(f"  2. 启动飞书 Bot: .\\start-bot.ps1")
+        print(f"  3. 手机给 Bot 发 '你好'")
+    else:
+        print(f"  1. 把 EPUB 书籍放到: {config['paths']['books_dir']}")
+        print(f"  2. 在 Claude Code 中输入: /deepread 读《书名》第1章")
+        print(f"  3. 笔记将保存到: {config['paths']['notes_dir']}")
+        print(f"  4. 打开 Web 控制台: .\\start.ps1")
     print()
 
 

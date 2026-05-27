@@ -22,12 +22,33 @@
 </div>
 
 <div class="actions">
-  <button onclick="compile()">📝 compile</button>
-  <button onclick="openFolder()">📂 打开文件夹</button>
+  <button onclick="compile()">compile</button>
+  <button onclick="checkQuality()">质量检查</button>
+  <button onclick="openFolder()">打开文件夹</button>
 </div>
+
+<div id="quality-result" class="quality-panel" style="display:none"></div>
+
+<style>
+.quality-panel {
+  margin-top: 16px; background: #fff; border-radius: 8px; padding: 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08); font-size: 13px;
+}
+.quality-panel .score { font-size: 28px; font-weight: 700; }
+.quality-panel .score.pass { color: #2e7d32; }
+.quality-panel .score.fail { color: #c62828; }
+.q-error { color: #c62828; margin: 2px 0; }
+.q-warn { color: #e65100; margin: 2px 0; }
+.q-suggest { color: #4a6fa5; margin: 2px 0; }
+.actions { margin: 16px 0; display: flex; gap: 8px; }
+.actions button { padding: 6px 14px; border: 1px solid #ccc; border-radius: 6px;
+  background: #fff; cursor: pointer; font-size: 13px; }
+.actions button:hover { background: #f0f0f5; }
+</style>
 
 <script>
 const notePath = {{ path | tojson }};
+
 function compile() {
   fetch('/api/notes/compile', {
     method: 'POST',
@@ -38,8 +59,41 @@ function compile() {
     if (d.ok) location.reload();
   });
 }
+
+function checkQuality() {
+  var panel = document.getElementById('quality-result');
+  panel.style.display = 'block';
+  panel.innerHTML = '检查中...';
+
+  fetch('/api/quality?path=' + encodeURIComponent(notePath))
+    .then(r => r.json()).then(d => {
+      if (!d.ok || !d.result) {
+        panel.innerHTML = '<div class="q-error">检查失败: ' + (d.error || '') + '</div>';
+        return;
+      }
+      var r = d.result;
+      var cls = r.pass ? 'pass' : 'fail';
+      var html = '<div class="score ' + cls + '">' + r.score + '/100 ' + (r.pass ? 'PASS' : 'FAIL') + '</div>';
+
+      if (r.errors && r.errors.length) {
+        html += '<div style="margin-top:8px"><strong>错误 (' + r.errors.length + '):</strong></div>';
+        r.errors.forEach(function(e) { html += '<div class="q-error">- ' + e + '</div>'; });
+      }
+      if (r.warnings && r.warnings.length) {
+        html += '<div style="margin-top:8px"><strong>警告 (' + r.warnings.length + '):</strong></div>';
+        r.warnings.forEach(function(w) { html += '<div class="q-warn">- ' + w + '</div>'; });
+      }
+      if (r.suggestions && r.suggestions.length) {
+        html += '<div style="margin-top:8px"><strong>建议 (' + r.suggestions.length + '):</strong></div>';
+        r.suggestions.forEach(function(s) { html += '<div class="q-suggest">- ' + s + '</div>'; });
+      }
+      panel.innerHTML = html;
+    }).catch(function(e) {
+      panel.innerHTML = '<div class="q-error">请求失败: ' + e + '</div>';
+    });
+}
+
 function openFolder() {
-  // 通过 API 打开文件夹（后端需实现，暂用复制路径替代）
   navigator.clipboard.writeText(notePath.replace(/[^\\]+\.md$/, ''));
   alert('文件夹路径已复制到剪贴板');
 }

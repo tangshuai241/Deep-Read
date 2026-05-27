@@ -156,9 +156,9 @@ def test_finalize_splits_explore_items():
         with open(note_path, encoding='utf-8') as f:
             content = f.read()
 
-        assert "- 问题一？" in content
-        assert "- 问题二？" in content
-        assert "- 问题三？" in content
+        assert "- 【理解缺口】问题一？" in content
+        assert "- 【理解缺口】问题二？" in content
+        assert "- 【理解缺口】问题三？" in content
         assert "- 1. 问题一？2." not in content
 
 
@@ -192,8 +192,8 @@ def test_compile_preserves_chapter_and_normalizes_sections():
         assert "> 引用一\n\n> 引用二" in content
         assert "### 联想" in content
         assert "\n## 联想\n" not in content
-        assert "- 问题一？" in content
-        assert "- 问题二？" in content
+        assert "- 【理解缺口】问题一？" in content
+        assert "- 【理解缺口】问题二？" in content
 
 
 def test_compile_content_adds_precise_links_without_touching_chapter():
@@ -212,12 +212,12 @@ def test_compile_content_adds_precise_links_without_touching_chapter():
     )
     suggestions = {
         "body_links": [
-            {"title": "系统1", "reason": "核心机制"},
-            {"title": "确认偏误", "reason": "核心机制"},
-            {"title": "光环效应", "reason": "具体表现"},
+            {"title": "系统1", "reason": "核心机制", "type": "concept_card"},
+            {"title": "确认偏误", "reason": "核心机制", "type": "concept_card"},
+            {"title": "光环效应", "reason": "具体表现", "type": "concept_card"},
         ],
         "related_links": [
-            {"title": "对基金加仓行为自我分析", "reason": "个人经验：投资场景中的单侧信息判断"},
+            {"title": "对基金加仓行为自我分析", "reason": "个人经验：投资场景中的单侧信息判断", "type": "personal_thought"},
         ],
     }
 
@@ -231,16 +231,88 @@ def test_compile_content_adds_precise_links_without_touching_chapter():
     assert "[[对基金加仓行为自我分析]]" in compiled
 
 
+def test_compile_filters_virtual_link_suggestions(monkeypatch):
+    import write_note
+
+    def fake_suggest_links(*args, **kwargs):
+        return {
+            "body_links": [
+                {"title": "系统1", "virtual": True, "type": "concept_card"},
+                {"title": "系统1定义", "path": "x", "type": "concept_card"},
+                {"title": "同书旧笔记", "path": "n", "type": "reading_note"},
+            ],
+            "related_links": [
+                {"title": "WYSIATI", "virtual": True},
+                {"title": "光环效应与群体的智慧", "path": "y", "type": "reading_note"},
+            ],
+        }
+
+    monkeypatch.setitem(sys.modules, "search_vault", type("M", (), {"suggest_links": fake_suggest_links}))
+    suggestions = write_note.load_link_suggestions("C:/tmp/测试笔记.md")
+
+    assert [item["title"] for item in suggestions["body_links"]] == ["系统1定义"]
+    assert [item["title"] for item in suggestions["related_links"]] == ["同书旧笔记", "光环效应与群体的智慧"]
+
+
+def test_compile_links_only_concept_cards_in_body_and_bolds_key_bullets():
+    content = (
+        "---\n"
+        "书名: 《思考快与慢》\n"
+        "章节: 8.我们究竟是如何作出判断的？\n"
+        "---\n"
+        "## 📖 引用原文\n"
+        "> 引用\n\n"
+        "## 💭 我的理解\n"
+        "- 情感启发式与光环效应的统一：底层都是替代机制。\n"
+        "\t- 旧读书笔记不要进正文。\n\n"
+        "## 🔗 让我想到\n"
+        "- 工程现场第一印象会影响后续判断。\n\n"
+        "## ❓ 待探索\n"
+    )
+    suggestions = {
+        "body_links": [
+            {"title": "光环效应", "reason": "概念卡", "type": "concept_card"},
+            {"title": "光环效应与群体的智慧", "reason": "读书笔记", "type": "reading_note"},
+        ],
+        "related_links": [
+            {"title": "对基金加仓行为自我分析", "reason": "个人经验", "type": "personal_thought"},
+        ],
+    }
+
+    compiled = compile_note_content(content, suggestions=suggestions)
+
+    assert "**情感启发式与[[光环效应]]的统一：**底层都是替代机制。" in compiled
+    assert "**工程现场第一印象会影响后续判断。**" in compiled
+    assert "[[光环效应与群体的智慧]]" in compiled
+    assert "[[对基金加仓行为自我分析]]" in compiled
+    assert "旧读书笔记不要进正文" in compiled
+
+
 def test_normalize_explore_text_dedupes_items():
     result = normalize_explore_text("1. 问题一？2. 问题二？\n- 问题一？")
 
-    assert result == "- 问题一？\n- 问题二？"
+    assert result == "- 【理解缺口】问题一？\n- 【理解缺口】问题二？"
 
 
 def test_normalize_explore_text_drops_empty_bullet():
     result = normalize_explore_text("- 1. 问题一？2. 问题二？")
 
-    assert result == "- 问题一？\n- 问题二？"
+    assert result == "- 【理解缺口】问题一？\n- 【理解缺口】问题二？"
+
+
+def test_normalize_explore_text_classifies_cognitive_gaps():
+    result = normalize_explore_text(
+        "情感启发式和光环效应的边界在哪里？\n"
+        "- 当我在工作中快速下判断时，怎么识别自己替代了问题？\n"
+        "- 后续读到损失厌恶时，回头看它是否也是替代机制？\n"
+        "- 【应用缺口】已经分类的问题不要重复套标签"
+    )
+
+    assert "- 【理解缺口】情感启发式和光环效应的边界在哪里？" in result
+    assert "- 【应用缺口】当我在工作中快速下判断时，怎么识别自己替代了问题？" in result
+    assert "- 【连接缺口】后续读到损失厌恶时，回头看它是否也是替代机制？" in result
+    assert "- 【应用缺口】已经分类的问题不要重复套标签" in result
+    assert "【应用缺口】【应用缺口】" not in result
 
 
 def test_section_mapping():

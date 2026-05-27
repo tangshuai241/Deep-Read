@@ -1,4 +1,5 @@
 """测试飞书适配器（不调用真实 lark-cli）。"""
+import json
 import sys
 from pathlib import Path
 
@@ -109,3 +110,65 @@ def test_unknown_short_text_goes_to_agent():
 
     assert qr is None
     assert need_agent is True
+
+
+def test_listen_lock_rejects_running_pid(tmp_path, monkeypatch):
+    lock = tmp_path / "feishu.lock"
+    lock.write_text('{"pid": 12345}', encoding="utf-8")
+    monkeypatch.setattr(feishu_bot, "LOCK_PATH", lock)
+    monkeypatch.setattr(feishu_bot, "_pid_is_running", lambda pid: pid == 12345)
+
+    assert feishu_bot.acquire_listen_lock() is False
+    assert lock.exists()
+
+
+def test_listen_lock_replaces_stale_pid(tmp_path, monkeypatch):
+    lock = tmp_path / "feishu.lock"
+    lock.write_text('{"pid": 12345}', encoding="utf-8")
+    monkeypatch.setattr(feishu_bot, "LOCK_PATH", lock)
+    monkeypatch.setattr(feishu_bot, "_pid_is_running", lambda pid: False)
+    monkeypatch.setattr(feishu_bot.os, "getpid", lambda: 999)
+
+    assert feishu_bot.acquire_listen_lock() is True
+    assert '"pid": 999' in lock.read_text(encoding="utf-8")
+    feishu_bot.release_listen_lock()
+    assert not lock.exists()
+
+
+def test_acquire_listen_lock_records_metadata(tmp_path, monkeypatch):
+    lock = tmp_path / "feishu.lock"
+    monkeypatch.setattr(feishu_bot, "LOCK_PATH", lock)
+    monkeypatch.setattr(feishu_bot, "_pid_is_running", lambda pid: False)
+    monkeypatch.setattr(feishu_bot.os, "getpid", lambda: 555)
+
+    assert feishu_bot.acquire_listen_lock(reply=True, notes_dir="C:\\test\\notes") is True
+
+    data = json.loads(lock.read_text(encoding="utf-8"))
+    assert data["pid"] == 555
+    assert data["reply"] is True
+    assert data["notes_dir"] == "C:\\test\\notes"
+    assert "started_at" in data
+    assert "cmd" in data
+
+    feishu_bot.release_listen_lock()
+    assert not lock.exists()
+
+
+def test_send_reply_truncates_long_text(monkeypatch):
+    captured = {}
+
+    class DummyResult:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return DummyResult()
+
+    monkeypatch.setattr(feishu_bot.subprocess, "run", fake_run)
+
+    long_text = "A" * 5000
+    assert feishu_bot.send_reply("ou_test", long_text, target_type="user") is True
+    cmd = captured["cmd"]
+    text_arg = cmd[cmd.index("--text") + 1]
+    assert len(text_arg) <= 4100  # 4000 + truncation suffix

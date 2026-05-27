@@ -161,13 +161,13 @@ def load_system_prompt(config):
     with open(skill, encoding='utf-8') as f:
         prompt = f.read()
 
-    for ref in ["dialogue-flow.md", "note-format.md", "fsm-spec.md"]:
+    for ref in ["dialogue-flow.md", "note-format.md", "fsm-spec.md", "learning-contract.md"]:
         rp = skill_dir / "references" / ref
         if rp.exists():
             with open(rp, encoding='utf-8') as f:
                 prompt += f"\n\n---\n## {ref}\n\n{f.read()}"
 
-    prompt += "\n\n重要：你必须调用工具来操作数据。不知道 EPUB 内容→调 extract_epub。不要直接写笔记→调 write_note。不知道状态→调 read_state。搜索知识库→调 search_vault。"
+    prompt += "\n\n重要：你必须调用工具来操作数据。不知道 EPUB 内容→调 extract_epub。不要直接写笔记→调 write_note。不知道状态→调 read_state。不知道学习路线/阶段是否通过→调 learning_contract。搜索知识库→调 search_vault。"
     return prompt
 
 
@@ -198,7 +198,7 @@ def run_script(name, *args):
     return out if out else "{}"
 
 
-def execute_tool(name, params):
+def execute_tool(name, params, user_id="default"):
     p = params or {}
     if name == "extract_epub":
         return run_script("extract_epub.py", "--book", str(p.get("book", "")),
@@ -216,7 +216,7 @@ def execute_tool(name, params):
                 args.extend([flag, str(p[key])])
         return run_script("write_note.py", action, *args)
     elif name == "read_state":
-        return run_script("state.py", "show")
+        return run_script("state.py", "--user", user_id, "show")
     elif name == "update_state":
         args = []
         for key, flag in [("stage", "--stage"), ("book", "--book"),
@@ -229,7 +229,7 @@ def execute_tool(name, params):
                           ("profile", "--add-profile")]:
             if key in p and p[key]:
                 args.extend([flag, str(p[key])])
-        return run_script("state.py", "set", *args) if args else json.dumps({"ok": True})
+        return run_script("state.py", "--user", user_id, "set", *args) if args else json.dumps({"ok": True})
     elif name == "search_vault":
         args = ["--json", "--limit", str(p.get("limit", 10))]
         scope = str(p.get("scope", "core") or "core")
@@ -244,6 +244,32 @@ def execute_tool(name, params):
         if p.get("include_wiki", True):
             args.append("--include-wiki")
         return run_script("search_vault.py", *args)
+    elif name == "learning_contract":
+        action = p.get("action", "show")
+        global_args = ["--user", user_id, "--json"]
+        args = []
+        if action == "init":
+            for key, flag in [("book", "--book"), ("chapter", "--chapter"),
+                              ("section", "--section"), ("goal", "--goal"),
+                              ("A_core", "--A_core"), ("B_important", "--B_important"),
+                              ("C_evidence", "--C_evidence"), ("D_application", "--D_application")]:
+                if key in p and p[key]:
+                    value = p[key]
+                    if isinstance(value, (list, dict)):
+                        value = json.dumps(value, ensure_ascii=False)
+                    args.extend([flag, str(value)])
+        elif action == "update":
+            for key, flag in [("point", "--point"), ("group", "--group"),
+                              ("status", "--status"), ("evidence", "--evidence"),
+                              ("event", "--event"), ("deposit", "--deposit"),
+                              ("note", "--note")]:
+                if key in p and p[key]:
+                    args.extend([flag, str(p[key])])
+        elif action == "check":
+            args.extend(["--stage", str(p.get("stage", "wrapup"))])
+        elif action not in ("show", "report"):
+            return json.dumps({"ok": False, "error": f"未知 learning_contract action: {action}"}, ensure_ascii=False)
+        return run_script("learning_contract.py", *global_args, action, *args)
     return json.dumps({"ok": False, "error": f"未知工具: {name}"})
 
 
@@ -317,6 +343,33 @@ TOOLS_ANTHROPIC = [
                 "limit": {"type": "integer", "description": "返回数量，默认10"}
             },
             "required": []
+        }
+    },
+    {
+        "name": "learning_contract",
+        "description": "读写章节学习契约：知识地图、A/B/C/D 分级、阶段通过检查、覆盖报告。每轮对话前和阶段切换前使用。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["init", "show", "update", "check", "report"]},
+                "book": {"type": "string"},
+                "chapter": {"type": "string"},
+                "section": {"type": "string"},
+                "goal": {"type": "string"},
+                "A_core": {"type": "array", "items": {"type": "string"}, "description": "必须掌握的核心机制"},
+                "B_important": {"type": "array", "items": {"type": "string"}, "description": "重要但可抽样讨论的概念/表现/对比"},
+                "C_evidence": {"type": "array", "items": {"type": "string"}, "description": "实验、例子、数据、作者论据"},
+                "D_application": {"type": "array", "items": {"type": "string"}, "description": "现实应用、个人经验、反例、边界条件"},
+                "point": {"type": "string", "description": "知识点标题"},
+                "group": {"type": "string", "enum": ["A_core", "B_important", "C_evidence", "D_application"]},
+                "status": {"type": "string", "enum": ["pending", "covered", "unclear", "passed"]},
+                "evidence": {"type": "string", "description": "用户自己的解释、追问结果或沉淀说明"},
+                "event": {"type": "string", "enum": ["boundary_or_counterexample", "application_probe", "old_note_connection", "personal_association"]},
+                "deposit": {"type": "string", "enum": ["understanding", "associations", "explore"]},
+                "note": {"type": "string", "description": "相关笔记路径"},
+                "stage": {"type": "string", "enum": ["feynman", "socratic", "associate", "wrapup"]}
+            },
+            "required": ["action"]
         }
     }
 ]
@@ -867,7 +920,7 @@ class DeepReadAgent:
                     tname = tc["name"]
                     tinp = tc["input"]
                     t0 = time.time()
-                    result = execute_tool(tname, tinp)
+                    result = execute_tool(tname, tinp, self.user_id)
                     elapsed = int((time.time() - t0) * 1000)
                     log_tool_call(self.session_id, tname, tinp, result, elapsed)
                     last_tool_results.append((tc["id"], tname, result))
@@ -949,7 +1002,7 @@ class DeepReadAgent:
                 self._thinking_override = None
                 continue
             if ui == "/state":
-                print(execute_tool("read_state", {}))
+                print(execute_tool("read_state", {}, self.user_id))
                 self._thinking_override = None
                 continue
             if ui == "/tools":

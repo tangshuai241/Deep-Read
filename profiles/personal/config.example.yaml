@@ -1,0 +1,61 @@
+# DeepRead Personal 配置样例
+# 完整版：Obsidian + LLM-Wiki + 概念卡 + 认知画像
+
+user:
+  name: "读者"
+  preferred_name: "读者"
+
+paths:
+  books_dir: "./books"
+  vault_dir: ""                          # 必填：Obsidian vault 路径
+  notes_dir: ""                          # 必填：笔记输出目录
+  state_dir: "./state"
+  reading_notes: "./reading-notes.md"
+  cognition_profile: "./cognition_profile.json"
+  wiki_integration_dir: ""               # LLM-Wiki 整合目录
+
+note:
+  template: "obsidian-three-section"
+  use_wikilinks: true
+  date_in_frontmatter: false
+
+reading:
+  max_words_per_session: 8000
+  auto_advance_stage: false
+
+integrations:
+  weread:
+    enabled: false
+  obsidian:
+    enabled: true
+  wiki:
+    enabled: true
+
+cognition:
+  enabled: true
+  update_frequency: "chapter_end"
+
+advanced:
+  log_level: "info"
+  backup_notes: true
+
+llm:
+  provider: ""                           # deepseek / anthropic / openai
+  model: "deepseek-v4-pro"
+  api_key: ""
+  base_url: ""
+  thinking: "auto"
+
+profile:
+  name: personal
+  default_modes:                         # personal 开放全部 8 种模式
+    - concept_deep_read
+    - proposition_dialogue
+    - method_conversion
+    - exam_mastery
+    - textbook_derivation
+    - standard_lookup
+    - case_review
+    - literature_experience
+  concept_pack: ""                       # personal 用 vault 概念卡
+  im_first: false

@@ -133,8 +133,36 @@ def normalize_body_text(text, default="(待填入)"):
     return text if text else default
 
 
+EXPLORE_CATEGORIES = ("理解缺口", "应用缺口", "连接缺口")
+
+
+def classify_explore_item(item):
+    """把待探索问题归入读者可用的三类认知缺口。"""
+    item = item.strip()
+    bracketed = re.match(r"^[【\[]\s*(理解缺口|应用缺口|连接缺口)\s*[】\]]\s*(.+)$", item)
+    if bracketed:
+        return bracketed.group(1), bracketed.group(2).strip()
+
+    connection_keywords = (
+        "旧笔记", "双链", "链接", "连接", "关联", "联想", "后续", "后面",
+        "下一章", "后续章节", "前景理论", "损失厌恶", "心理物理学", "LLM-Wiki",
+        "Wiki", "回头看", "延伸",
+    )
+    application_keywords = (
+        "怎么识别", "如何识别", "怎么发现", "如何发现", "训练", "实践",
+        "行动", "执行", "工作", "工程", "投资", "生活", "现实", "场景",
+        "自己", "我在", "日常", "即时识别", "清单",
+    )
+
+    if any(keyword in item for keyword in connection_keywords):
+        return "连接缺口", item
+    if any(keyword in item for keyword in application_keywords):
+        return "应用缺口", item
+    return "理解缺口", item
+
+
 def normalize_explore_text(text):
-    """把待探索问题拆成多条 bullet。"""
+    """把待探索问题拆成带分类的 bullet。"""
     text = clean_note_text(text)
     if not text:
         return ""
@@ -154,8 +182,10 @@ def normalize_explore_text(text):
 
     deduped = []
     for item in items:
-        if item not in deduped:
-            deduped.append(item)
+        category, question = classify_explore_item(item)
+        normalized = f"【{category}】{question}"
+        if normalized not in deduped:
+            deduped.append(normalized)
     return "\n".join(f"- {item}" for item in deduped)
 
 
@@ -211,14 +241,14 @@ def normalize_understanding_section(text):
     text = normalize_body_text(text)
     if text.startswith("(待填入)"):
         return text
-    return text
+    return emphasize_primary_bullets(text)
 
 
 def normalize_connection_section(text):
     text = normalize_body_text(text, default="")
     if text.startswith("## 联想"):
         text = "### 联想" + text[len("## 联想"):]
-    return text
+    return emphasize_primary_bullets(text)
 
 
 def strip_extension_links(text):
@@ -231,13 +261,42 @@ def strip_extension_links(text):
     ).strip()
 
 
-def load_link_suggestions(note_path, max_body=5, max_related=5):
+def emphasize_primary_bullets(text):
+    """给一级 bullet 的第一句加粗，作为 Obsidian 回看锚点。"""
+    if not text:
+        return text
+    lines = []
+    bullet_pattern = re.compile(r"^(-\s+)(?!\*\*)(.+)$")
+    for line in text.splitlines():
+        match = bullet_pattern.match(line)
+        if not match:
+            lines.append(line)
+            continue
+        body = match.group(2).strip()
+        if not body or body.startswith("[[") or body.startswith("【"):
+            lines.append(line)
+            continue
+        if "**" in body[:12]:
+            lines.append(line)
+            continue
+        sentence = re.match(r"(.+?[。！？!?：:])(\s*.*)$", body)
+        if sentence:
+            lead, rest = sentence.groups()
+            lines.append(f"{match.group(1)}**{lead.strip()}**{rest}")
+        else:
+            lines.append(f"{match.group(1)}**{body}**")
+    return "\n".join(lines)
+
+
+def load_link_suggestions(note_path, max_body=8, max_related=5):
     """调用 search_vault 的 Wiki-aware 候选链接。失败时静默跳过。"""
     try:
         from search_vault import suggest_links
         data = suggest_links(note_path, scope="core", limit=24, include_wiki=True)
     except Exception:
         return {"body_links": [], "related_links": []}
+
+    current_title = os.path.splitext(os.path.basename(note_path))[0]
 
     def trim(items, limit):
         trimmed = []
@@ -246,15 +305,29 @@ def load_link_suggestions(note_path, max_body=5, max_related=5):
             title = item.get("title", "").strip()
             if not title or title in seen:
                 continue
+            if item.get("virtual"):
+                # 避免 compile 自动制造 Obsidian 中未确认存在的断链。
+                continue
+            if title == current_title:
+                continue
             seen.add(title)
             trimmed.append(item)
             if len(trimmed) >= limit:
                 break
         return trimmed
 
+    body_candidates = [
+        item for item in data.get("body_links", [])
+        if item.get("type") == "concept_card"
+    ]
+    related_candidates = [
+        item for item in data.get("body_links", []) + data.get("related_links", [])
+        if item.get("type") != "concept_card"
+    ]
+
     return {
-        "body_links": trim(data.get("body_links", []), max_body),
-        "related_links": trim(data.get("related_links", []), max_related),
+        "body_links": trim(body_candidates, max_body),
+        "related_links": trim(related_candidates, max_related),
     }
 
 
@@ -263,41 +336,88 @@ def has_wikilink(text, title):
     return bool(pattern.search(text))
 
 
-def link_first_plain_mention(text, title):
-    """只链接首次纯文本出现，跳过已经在 wikilink 内的内容。"""
-    if not title or has_wikilink(text, title):
+def link_first_plain_mention(text, title, alias=None):
+    """只链接首次纯文本出现，跳过已经在 wikilink 内的内容。
+    如果 alias 非空，则用 alias 匹配原文并用 pipe 链接形式。
+    """
+    if not title:
+        return text, False
+    match_text = alias if alias else title
+    if not match_text or has_wikilink(text, title):
         return text, False
 
-    pattern = re.compile(re.escape(title))
-    for match in pattern.finditer(text):
-        start, end = match.span()
+    # 转义并构建正则，匹配独立词（中文边界由前后文决定）
+    pattern = re.compile(re.escape(match_text))
+    for m in pattern.finditer(text):
+        start, end = m.span()
         before = text[max(0, start - 2):start]
         after = text[end:end + 2]
         if before == "[[" or after == "]]":
             continue
-        return text[:start] + f"[[{title}]]" + text[end:], True
+        # 跳过在行内代码或代码块中的
+        line_start = text.rfind("\n", 0, start) + 1
+        line_prefix = text[line_start:start]
+        if "`" in line_prefix and line_prefix.rfind("`") > line_prefix.rfind("\n"):
+            continue
+        if alias:
+            return text[:start] + f"[[{title}|{alias}]]" + text[end:], True
+        else:
+            return text[:start] + f"[[{title}]]" + text[end:], True
     return text, False
 
 
-def autolink_sections(understanding, connections, suggestions):
-    """少而准地给正文插入强相关链接。"""
+def load_concept_alias_map(config=None):
+    """延迟加载概念卡别名索引（避免循环导入）。"""
+    try:
+        from search_vault import load_concept_index
+        return load_concept_index(config)
+    except Exception:
+        return {}
+
+
+def autolink_sections(understanding, connections, suggestions, concept_index=None):
+    """少而准地给正文插入强相关链接（概念卡主标题+别名）。"""
     linked = []
     understanding = normalize_understanding_section(understanding)
     connections = strip_extension_links(normalize_connection_section(connections))
 
+    if concept_index is None:
+        concept_index = {}
+
     for item in suggestions.get("body_links", []):
         title = item.get("title", "").strip()
-        if not title:
+        if not title or title in linked:
             continue
-        new_understanding, changed = link_first_plain_mention(understanding, title)
+
+        # 1. 先试主标题直接匹配
+        new_u, changed = link_first_plain_mention(understanding, title)
         if changed:
-            understanding = new_understanding
+            understanding = new_u
             linked.append(title)
             continue
-        new_connections, changed = link_first_plain_mention(connections, title)
+        new_c, changed = link_first_plain_mention(connections, title)
         if changed:
-            connections = new_connections
+            connections = new_c
             linked.append(title)
+            continue
+
+        # 2. 再试别名匹配：找出该概念所有别名
+        title_lower = title.lower()
+        aliases = [
+            key for key, can in concept_index.items()
+            if can.lower() == title_lower and key != title_lower
+        ]
+        for alias_text in aliases:
+            new_u, changed = link_first_plain_mention(understanding, title, alias=alias_text)
+            if changed:
+                understanding = new_u
+                linked.append(title)
+                break
+            new_c, changed = link_first_plain_mention(connections, title, alias=alias_text)
+            if changed:
+                connections = new_c
+                linked.append(title)
+                break
 
     return understanding, connections, linked
 
@@ -329,6 +449,28 @@ def append_related_links(connections, suggestions, linked_titles=None):
     return "\n".join(block_lines)
 
 
+def normalize_link_suggestions_for_sections(suggestions):
+    """正文只链接概念卡；其他候选进入延伸阅读。"""
+    suggestions = suggestions or {}
+    body_links = []
+    related_links = []
+
+    for item in suggestions.get("body_links", []):
+        if item.get("virtual"):
+            continue
+        if item.get("type") == "concept_card":
+            body_links.append(item)
+        else:
+            related_links.append(item)
+
+    for item in suggestions.get("related_links", []):
+        if item.get("virtual"):
+            continue
+        related_links.append(item)
+
+    return {"body_links": body_links, "related_links": related_links}
+
+
 def compile_note_content(content, suggestions=None):
     """把已有笔记重新编译成稳定的 Obsidian 三段式。"""
     frontmatter, body = extract_frontmatter(content)
@@ -344,8 +486,10 @@ def compile_note_content(content, suggestions=None):
         parts.append(frontmatter)
 
     if suggestions:
+        suggestions = normalize_link_suggestions_for_sections(suggestions)
+        concept_index = load_concept_alias_map()
         understanding, connections, linked_titles = autolink_sections(
-            understanding, connections, suggestions
+            understanding, connections, suggestions, concept_index=concept_index
         )
         connections = append_related_links(connections, suggestions, linked_titles)
 
