@@ -14,6 +14,10 @@ import re
 import sys
 import os
 import warnings
+import zipfile
+import posixpath
+import urllib.parse
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from errors import error, BOOK_NOT_FOUND, CHAPTER_NOT_FOUND, EPUB_PARSE_FAILED
 
@@ -47,9 +51,12 @@ def resolve_book_path(book_arg, books_dir):
         return candidate
     if not os.path.isdir(books_dir):
         return None
-    for f in os.listdir(books_dir):
-        if f.endswith('.epub') and book_arg.replace('.epub', '') in f:
-            return os.path.join(books_dir, f)
+    needle = book_arg.replace('.epub', '').replace('.EPUB', '').lower()
+    for root, dirs, files in os.walk(books_dir):
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        for f in files:
+            if f.lower().endswith('.epub') and needle in f.lower():
+                return os.path.join(root, f)
     return None
 
 
@@ -61,6 +68,165 @@ def clean_html(html_content):
     text = re.sub(r'\n\s*\n', '\n\n', text)
     text = re.sub(r'[ \t]+', ' ', text)
     return text.strip()
+
+
+def _decode_bytes(data):
+    for encoding in ("utf-8", "utf-8-sig", "gb18030", "big5"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="ignore")
+
+
+class ZipEpubItem:
+    def __init__(self, name, content):
+        self._name = name
+        self._content = content
+
+    def get_name(self):
+        return self._name
+
+    def get_content(self):
+        return self._content
+
+
+class ZipEpubBook:
+    """EPUB 容错读取器：只读取目录和文本资源，跳过损坏的图片/字体等资源。"""
+
+    def __init__(self, path):
+        self.path = path
+        self.items = []
+        self.metadata = {"title": [], "creator": []}
+        self.spine = []
+        self.manifest = {}
+
+    def get_items(self):
+        return self.items
+
+    def get_metadata(self, namespace, key):
+        if namespace != "DC":
+            return []
+        return [(v, {}) for v in self.metadata.get(key, [])]
+
+
+def _container_opf_path(zf):
+    try:
+        raw = zf.read("META-INF/container.xml")
+    except Exception:
+        return None
+    root = ET.fromstring(raw)
+    for elem in root.iter():
+        if elem.tag.endswith("rootfile"):
+            return elem.attrib.get("full-path")
+    return None
+
+
+def _xml_texts(root, local_name):
+    values = []
+    for elem in root.iter():
+        if elem.tag.split("}")[-1] == local_name and elem.text:
+            values.append(elem.text.strip())
+    return [v for v in values if v]
+
+
+def _local_name(tag):
+    return tag.split("}")[-1]
+
+
+def _join_epub_path(base_dir, href):
+    href = urllib.parse.unquote((href or "").split("#")[0])
+    if not href:
+        return ""
+    return posixpath.normpath(posixpath.join(base_dir, href))
+
+
+def _parse_opf_into_book(book, opf_raw, opf_dir):
+    root = ET.fromstring(opf_raw)
+    book.metadata["title"] = _xml_texts(root, "title")
+    book.metadata["creator"] = _xml_texts(root, "creator")
+
+    manifest = {}
+    spine_ids = []
+    for elem in root.iter():
+        local = _local_name(elem.tag)
+        if local == "item":
+            item_id = elem.attrib.get("id")
+            href = elem.attrib.get("href", "")
+            if item_id and href:
+                manifest[item_id] = {
+                    "href": _join_epub_path(opf_dir, href),
+                    "media_type": elem.attrib.get("media-type", ""),
+                    "properties": elem.attrib.get("properties", ""),
+                }
+        elif local == "itemref":
+            idref = elem.attrib.get("idref")
+            if idref:
+                spine_ids.append(idref)
+
+    book.manifest = manifest
+    book.spine = [
+        manifest[item_id]["href"]
+        for item_id in spine_ids
+        if item_id in manifest and manifest[item_id]["href"]
+    ]
+
+
+def read_epub_tolerant(book_path):
+    """读取损坏 EPUB 的文本资源。ebooklib 失败时使用。"""
+    book = ZipEpubBook(book_path)
+    with zipfile.ZipFile(book_path) as zf:
+        names = set(zf.namelist())
+        opf_path = _container_opf_path(zf)
+        opf_dir = posixpath.dirname(opf_path) if opf_path else ""
+
+        if opf_path and opf_path in names:
+            opf_raw = zf.read(opf_path)
+            try:
+                _parse_opf_into_book(book, opf_raw, opf_dir)
+            except Exception:
+                pass
+            book.items.append(ZipEpubItem(opf_path, opf_raw))
+
+        text_exts = (".ncx", ".xhtml", ".html", ".htm", ".xml")
+        for name in zf.namelist():
+            lower = name.lower()
+            if not lower.endswith(text_exts):
+                continue
+            try:
+                content = zf.read(name)
+            except Exception as exc:
+                print(f"[WARN] 跳过损坏资源: {name} ({exc})", file=sys.stderr)
+                continue
+            book.items.append(ZipEpubItem(name, content))
+
+        # 有些 OPF manifest 的 href 是相对路径，而 NCX 里的 content src 也是相对 OPF 目录。
+        # 这里把文本资源再补一个去掉 OPF 目录的别名，兼容旧的 item.get_name() 精确匹配逻辑。
+        if opf_dir:
+            aliases = []
+            existing = {item.get_name() for item in book.items}
+            for item in list(book.items):
+                name = item.get_name()
+                if name.startswith(opf_dir + "/"):
+                    alias = name[len(opf_dir) + 1:]
+                    if alias and alias not in existing:
+                        aliases.append(ZipEpubItem(alias, item.get_content()))
+                        existing.add(alias)
+            book.items.extend(aliases)
+
+    return book
+
+
+def load_epub(book_path):
+    try:
+        return epub.read_epub(book_path), "ebooklib"
+    except Exception as exc:
+        print(f"[WARN] ebooklib 读取失败，尝试容错文本模式: {exc}", file=sys.stderr)
+        try:
+            return read_epub_tolerant(book_path), "zip-tolerant"
+        except Exception as fallback_exc:
+            error(EPUB_PARSE_FAILED, f"EPUB 解析失败: {fallback_exc}",
+                  hint=f"原始错误: {exc}")
 
 
 CHINESE_DIGITS = {
@@ -106,29 +272,161 @@ NCX_ENTRY_PATTERN = re.compile(
 )
 
 
+def _entry_from_title_file(title, fname, fallback_num=None):
+    title = re.sub(r"\s+", " ", BeautifulSoup(title, "lxml").get_text()).strip()
+    cm = CHAPTER_PATTERN.match(title)
+    pm = PART_PATTERN.match(title)
+    chapter_num = chinese_num_to_int(cm.group(1)) if cm else fallback_num
+    is_chapter = bool(cm) or fallback_num is not None
+    return {
+        "title": title,
+        "file": fname,
+        "is_chapter": is_chapter,
+        "is_part": bool(pm),
+        "chapter_num": chapter_num,
+    }
+
+
+def _normalize_epub_ref(ref):
+    return urllib.parse.unquote((ref or "").split("#")[0])
+
+
 def parse_ncx(book):
     """用正则从 NCX 提取所有导航点（扁平列表）。
     返回: [{"title": ..., "file": ..., "is_chapter": bool, "is_part": bool, "chapter_num": int|None}, ...]
     """
     for item in book.get_items():
         if 'ncx' in item.get_name().lower():
-            raw = item.get_content().decode('utf-8')
+            raw = _decode_bytes(item.get_content())
             entries = []
+            chapter_idx = 0
             for m in NCX_ENTRY_PATTERN.finditer(raw):
                 title = m.group(1).strip()
-                fname = m.group(2).split('#')[0]
-                cm = CHAPTER_PATTERN.match(title)
-                pm = PART_PATTERN.match(title)
-                chapter_num = chinese_num_to_int(cm.group(1)) if cm else None
-                entries.append({
-                    "title": title,
-                    "file": fname,
-                    "is_chapter": bool(cm),
-                    "is_part": bool(pm),
-                    "chapter_num": chapter_num
-                })
+                fname = _normalize_epub_ref(m.group(2))
+                entry = _entry_from_title_file(title, fname)
+                if not entry["is_chapter"] and _looks_like_content_file(fname):
+                    chapter_idx += 1
+                    entry = _entry_from_title_file(title, fname, fallback_num=chapter_idx)
+                elif entry["is_chapter"] and entry["chapter_num"]:
+                    chapter_idx = max(chapter_idx, entry["chapter_num"])
+                entries.append(entry)
+            if entries:
+                return entries
+    return parse_nav_or_spine(book)
+
+
+def parse_nav_or_spine(book):
+    nav_entries = parse_nav_xhtml(book)
+    if nav_entries:
+        return nav_entries
+    spine_entries = parse_spine(book)
+    if spine_entries:
+        return spine_entries
+    return synthesize_chapters_from_items(book)
+
+
+def parse_nav_xhtml(book):
+    """解析 EPUB3 nav.xhtml 目录。"""
+    for item in book.get_items():
+        name = item.get_name().lower()
+        if not name.endswith((".xhtml", ".html", ".htm")):
+            continue
+        soup = BeautifulSoup(item.get_content(), "lxml")
+        nav = soup.find("nav", attrs={"epub:type": re.compile(r"\btoc\b")}) or soup.find("nav")
+        if not nav:
+            continue
+        entries = []
+        chapter_idx = 0
+        for a in nav.find_all("a"):
+            title = a.get_text(" ", strip=True)
+            href = _normalize_epub_ref(a.get("href", ""))
+            if not title or not href:
+                continue
+            entry = _entry_from_title_file(title, href)
+            if not entry["is_chapter"] and _looks_like_content_file(href):
+                chapter_idx += 1
+                entry = _entry_from_title_file(title, href, fallback_num=chapter_idx)
+            elif entry["is_chapter"] and entry["chapter_num"]:
+                chapter_idx = max(chapter_idx, entry["chapter_num"])
+            entries.append(entry)
+        if entries:
             return entries
     return []
+
+
+def parse_spine(book):
+    """从 OPF spine 合成章节。ZipEpubBook 可用；ebooklib 对象无该字段时自动跳过。"""
+    spine = getattr(book, "spine", []) or []
+    if not spine:
+        return []
+    entries = []
+    chapter_idx = 0
+    for file_name in spine:
+        text = get_content_for_file(book, file_name)
+        if not text or len(text.strip()) < 20:
+            continue
+        title = infer_title_from_file(book, file_name) or f"第{chapter_idx + 1}章"
+        if PART_PATTERN.match(title):
+            entries.append(_entry_from_title_file(title, file_name))
+            continue
+        cm = CHAPTER_PATTERN.match(title)
+        if cm:
+            entry = _entry_from_title_file(title, file_name)
+            chapter_idx = max(chapter_idx, entry["chapter_num"] or chapter_idx)
+        else:
+            chapter_idx += 1
+            entry = _entry_from_title_file(title, file_name, fallback_num=chapter_idx)
+        entries.append(entry)
+    return entries
+
+
+def synthesize_chapters_from_items(book):
+    """最后兜底：从所有文本文件中合成章节列表。"""
+    entries = []
+    chapter_idx = 0
+    for item in book.get_items():
+        name = item.get_name()
+        lower = name.lower()
+        if not lower.endswith((".xhtml", ".html", ".htm")):
+            continue
+        if "nav" in lower or "toc" in lower or "cover" in lower:
+            continue
+        text = get_content_for_file(book, name)
+        if not text or len(text.strip()) < 100:
+            continue
+        title = infer_title_from_file(book, name) or Path(name).stem
+        if PART_PATTERN.match(title):
+            entries.append(_entry_from_title_file(title, name))
+            continue
+        cm = CHAPTER_PATTERN.match(title)
+        if cm:
+            entry = _entry_from_title_file(title, name)
+            chapter_idx = max(chapter_idx, entry["chapter_num"] or chapter_idx)
+        else:
+            chapter_idx += 1
+            entry = _entry_from_title_file(title, name, fallback_num=chapter_idx)
+        entries.append(entry)
+    return entries
+
+
+def infer_title_from_file(book, file_name):
+    soup = get_content_soup(book, file_name)
+    if not soup:
+        return ""
+    for selector in ("h1", "h2", "h3", "title"):
+        tag = soup.find(selector)
+        if tag:
+            title = tag.get_text(" ", strip=True)
+            if title:
+                return title
+    return ""
+
+
+def _looks_like_content_file(file_name):
+    lower = (file_name or "").lower()
+    if not lower.endswith((".xhtml", ".html", ".htm")):
+        return False
+    return not any(skip in lower for skip in ("cover", "nav", "toc", "copyright", "titlepage"))
 
 
 def get_chapter_sections(ncx, chapter_num):
@@ -149,16 +447,33 @@ def get_chapter_sections(ncx, chapter_num):
     return sections
 
 
+def _candidate_file_names(file_name):
+    raw = _normalize_epub_ref(file_name)
+    if not raw:
+        return []
+    basename = posixpath.basename(raw)
+    candidates = [raw]
+    if basename and basename != raw:
+        candidates.append(basename)
+    return candidates
+
+
 def get_content_for_file(book, file_name):
+    candidates = _candidate_file_names(file_name)
     for item in book.get_items():
-        if item.get_name() == file_name:
+        item_name = _normalize_epub_ref(item.get_name())
+        item_base = posixpath.basename(item_name)
+        if item_name in candidates or item_base in candidates:
             return clean_html(item.get_content())
     return None
 
 
 def get_content_soup(book, file_name):
+    candidates = _candidate_file_names(file_name)
     for item in book.get_items():
-        if item.get_name() == file_name:
+        item_name = _normalize_epub_ref(item.get_name())
+        item_base = posixpath.basename(item_name)
+        if item_name in candidates or item_base in candidates:
             return BeautifulSoup(item.get_content(), 'lxml')
 
 
@@ -179,17 +494,15 @@ def list_chapters(book, ncx):
 
 
 def find_chapter(ncx, chapter_ref):
-    try:
-        target = int(chapter_ref)
+    target = chinese_num_to_int(str(chapter_ref))
+    if target is not None:
         for entry in ncx:
             if entry["is_chapter"] and entry["chapter_num"] == target:
                 return entry
-        return None
-    except ValueError:
-        for entry in ncx:
-            if chapter_ref in entry["title"] and entry["is_chapter"]:
-                return entry
-        return None
+    for entry in ncx:
+        if str(chapter_ref) in entry["title"] and entry["is_chapter"]:
+            return entry
+    return None
 
 
 def extract_chapter_text(book, entry, ncx):
@@ -307,8 +620,11 @@ def main():
         error(BOOK_NOT_FOUND, f"找不到书籍: {args.book}",
               hint=f"搜索目录: {books_dir}，请确认文件名正确且文件存在")
 
-    book = epub.read_epub(book_path)
+    book, read_mode = load_epub(book_path)
     ncx = parse_ncx(book)
+    if not ncx:
+        error(EPUB_PARSE_FAILED, "无法从 EPUB 中识别目录或正文章节",
+              hint="可尝试换一个 EPUB 版本，或将章节原文粘贴给 Bot")
 
     if args.meta:
         meta = get_book_meta(book, ncx)
