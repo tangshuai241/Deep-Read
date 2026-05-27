@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}阅读模式 — DeepRead Studio{% endblock %}
 {% block content %}
 <h1>阅读模式</h1>
 <button onclick="loadModes()" style="margin-bottom:12px">刷新</button>
@@ -9,6 +10,8 @@ function loadModes() {
   document.getElementById('output').textContent = '加载中...';
   fetch('/api/modes').then(r => r.json()).then(d => {
     document.getElementById('output').textContent = d.output || '无输出';
+  }).catch(function(e) {
+    document.getElementById('output').textContent = '加载失败: ' + e;
   });
 }
 loadModes();

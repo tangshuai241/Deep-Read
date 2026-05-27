@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}对比实验 — DeepRead Studio{% endblock %}
 {% block content %}
 <h1>对比实验</h1>
 
@@ -81,19 +82,27 @@ function runDiff() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({left: selectedLeft.path, right: selectedRight.path})
   }).then(r => r.json()).then(d => {
-    if (!d.ok) { alert(d.error); return; }
+    if (!d.ok) {
+      document.getElementById('diffResult').style.display = 'block';
+      document.getElementById('diffStats').textContent = d.error || '对比失败';
+      return;
+    }
     const r = d.result;
     document.getElementById('diffResult').style.display = 'block';
+    var lq = parseInt(r.left_stats.quote_count)||0, lw = parseInt(r.left_stats.word_count)||0;
+    var ll = parseInt(r.left_stats.link_count)||0, lfm = r.left_stats.fm_complete;
+    var rq = parseInt(r.right_stats.quote_count)||0, rw = parseInt(r.right_stats.word_count)||0;
+    var rl = parseInt(r.right_stats.link_count)||0, rfm = r.right_stats.fm_complete;
     document.getElementById('diffStats').innerHTML =
-      `<div class="card"><h3>左侧</h3>
-        引用:${r.left_stats.quote_count} 字数:${r.left_stats.word_count} 内链:${r.left_stats.link_count}
-        fm:${r.left_stats.fm_complete ? '✓' : '✗'}
-       </div>
-       <div class="card"><h3>右侧</h3>
-        引用:${r.right_stats.quote_count} 字数:${r.right_stats.word_count} 内链:${r.right_stats.link_count}
-        fm:${r.right_stats.fm_complete ? '✓' : '✗'}
-       </div>`;
+      '<div class="card"><h3>左侧</h3>'
+      + '引用:'+lq+' 字数:'+lw+' 内链:'+ll+' fm:'+(lfm?'OK':'缺')
+      + '</div><div class="card"><h3>右侧</h3>'
+      + '引用:'+rq+' 字数:'+rw+' 内链:'+rl+' fm:'+(rfm?'OK':'缺')
+      + '</div>';
     document.getElementById('diffContent').textContent = r.diff || '(无差异)';
+  }).catch(function(e) {
+    document.getElementById('diffResult').style.display = 'block';
+    document.getElementById('diffStats').textContent = '请求失败: ' + e;
   });
 }
 </script>

@@ -6,6 +6,54 @@
 
 ## 更新日志
 
+### 2026-05-28 — v2.5 阅读模式接入 Agent
+
+| 更新内容 | 说明 |
+|------|------|
+| `scripts/reading_modes.py` | 新增 140 行集中模式定义：8 种模式 + suggest/list/get/allowed + 快速名称表 + mode_hint_text |
+| `cli.py` 重构 | 删除内联 READING_MODES dict（-90 行），改为 import 委托 |
+| `learning_contract.py` | default_contract 增加 profile/book_type/reading_mode/mode_reason 字段；init 支持新参数 |
+| `agent.py` 新工具 | `reading_mode` 工具（suggest/show/set/list）+ 系统提示注入模式判断规则 |
+| `note_quality.py` | 模式感知检查：考试缺自测→WARN / 方法缺行动→WARN / 命题缺立场→WARN |
+| Skill 同步 | 新增 `skill/references/reading-modes.md`，同步到 Claude Code skill 目录 |
+| 不变部分 | concept_deep_read 保持四阶段流程不退；旧契约缺字段默认 concept_deep_read；personal 额外 4 模式可识别可契约 |
+
+### 2026-05-28 — v2.4.1 收口版本
+
+| 更新内容 | 说明 |
+|------|------|
+| 旧配置兼容 | 无 profile.name 自动识别为 personal，doctor 给出 1 WARN + 迁移提示 |
+| concepts report 双源 | 同时统计用户 vault 概念卡 + Trial 基础包，Trial 用户无 Obsidian 也能看到基础包状态 |
+| CLI 编码统一 | `sys.stdout.reconfigure(encoding='utf-8')` 解决 GBK 终端中文乱码 |
+| doctor profile 检查 | 新增 Profile 健康项：Trial 检查基础包可用性、Personal 检查 LLM-Wiki 目录 |
+| README 升级说明 | v2.4.1 旧用户无需重新初始化 |
+
+### 2026-05-28 — v2.4 单仓库双发行形态 + IM-first + 概念卡体系
+
+| 更新内容 | 说明 |
+|------|------|
+| P1 Profile 分发 | `profiles/trial/` + `profiles/personal/` 两套配置；`init.py --profile` + `install.ps1 -Profile` |
+| P2 IM-first | `docs/手机端使用指南.md`；Trial 默认飞书入口、低依赖、不强制 Obsidian/Wiki |
+| P3 阅读模式 CLI | `cli.py modes list/suggest/show`；8 种模式，Trial 开放 4 种；《被讨厌的勇气》→命题辨析，《一级建造师》→考试掌握 |
+| P4 Web 运维页 | `/setup` `/modes` `/concepts` 三个页面 + API；定位为控制台非学习入口 |
+| P5 概念卡基础包 | `profiles/trial/concepts/` 20 张卡（认知10+学习5+思维3+系统2）；`search_vault` 两级索引（用户卡优先→Trial 包 fallback） |
+| Bot 管理 | `cli.py bot status/start/stop/restart`；Web API `/api/bot/*` |
+| Doctor 增强 | 28→30 项检查；`--deep` 模式（LLM 连通性/飞书 CLI/笔记质量抽样） |
+| 笔记质量检查器 | `scripts/note_quality.py`；`cli.py quality <path> [--json]`；Web 笔记详情页一键检查 |
+| 概念卡别名 | `search_vault.load_concept_index()` 扫描 aliases/alias/别名；正文双链支持 `[[光环效应\|晕轮效应]]` |
+| 安装脚本 | `install.ps1` / `start.ps1` / `start-bot.ps1`；新手一键部署 |
+
+### 2026-05-27 — v2.3 语义链接 + Web 控制台
+
+| 更新内容 | 说明 |
+|------|------|
+| Web 控制台 | FastAPI `server.py`，8 个页面模板；`templates/dashboard.html` 工作台首页 |
+| 混合检索 | `search_vault.py` 轻量语义扩展 + Wiki 路由 + 虚拟概念候选 |
+| 智能双链 | `write_note.py compile` 正文只链接概念卡，弱相关放入延伸阅读；链接类型优先级排序 |
+| 渐进式写入 | create(阶段1)→update(阶段2)→append(阶段3)→finalize+compile(阶段4) |
+| 工作台首页 | 4 功能入口卡 + 当前阅读任务 + 知识积累 + 系统状态 + 过滤后最近活动 |
+| 飞书 Bot 增强 | 锁文件元数据（cmd/reply/notes_dir）；消息去重+命令白名单完成 |
+
 ### 2026-05-27 16:41:31 +08:00 — Obsidian 正文概念链接与排版优化
 
 | 更新内容 | 说明 |
@@ -145,7 +193,7 @@
 
 ---
 
-## 最终架构
+## 最终架构 (v2.5)
 
 ```
 手机飞书 ──→ feishu_bot.py listen --reply
@@ -157,16 +205,23 @@
          ▼       ▼       ▼
     DeepSeek  Anthropic  OpenAI
          │
+         ├─→ reading_modes.py ──→ 模式判断/切换
+         ├─→ learning_contract.py ──→ 学习契约（含模式）
          ├─→ extract_epub.py ──→ EPUB → JSON
          ├─→ write_note.py  ──→ Obsidian 笔记
          ├─→ state.py       ──→ 阅读状态
-         └─→ search_vault.py ──→ 旧笔记搜索
+         ├─→ search_vault.py ──→ 概念卡 + 别名 + 旧笔记
+         └─→ note_quality.py ──→ 质量检查（模式感知）
+
+Web 控制台:
+  server.py ──→ /setup /modes /concepts /doctor /sessions /notes /compare
 
 终端精读:
   python agent.py
 
-开发者调试:
-  Claude Code + /deepread
+发行形态:
+  install.ps1 -Profile trial    # 体验版：IM-first + 4 模式 + 基础概念包
+  install.ps1 -Profile personal # 完整版：Obsidian + Wiki + 8 模式 + 全链路
 ```
 
 ## 关键决策记录
@@ -179,12 +234,18 @@
 | 默认模型 | deepseek-v4-pro | 默认启用 auto thinking，深任务使用 Pro 推理 |
 | 飞书集成 | process_message() 直调 | 保持会话连续性 |
 | Skill 存放 | deepread/skill/ 自包含 | 不依赖外部路径 |
+| 发行形态 | 单仓库双 profile | 不拆两个 repo，配置文件隔离 |
+| 阅读模式 | 契约控制参数 | 模式影响追问方向，不推翻四阶段 |
+| 概念卡 | 用户卡 > Trial 包 > 不链接 | 不静默污染用户 Obsidian |
 | 日志格式 | NDJSON | 可追加、可 grep、可结构化 |
 | 笔记写入 | 渐进式（非一次性） | 每阶段产出即写入 |
 | 错误格式 | 统一 JSON | `{"ok":false,"error_code":"...","hint":"..."}` |
+| Web 定位 | 运维控制台，非学习入口 | IM 是主入口，Obsidian 是沉淀层 |
 
 ## 当前版本
 
-**v2.1.3** — 7 个 commit，30 测试全绿，18 doctor 通过，飞书稳定运行中。
+**v2.5** — 阅读模式接入 Agent。76 测试全绿，30 doctor 检查通过。
 
-下一步：7 天真实使用期，记录使用体验到 RUNNING_NOTES.md，不加新功能，只修问题。
+8 种阅读模式 / 双发行形态 / 飞书 Bot / Web 控制台 / 20 张基础概念卡 / 笔记质量检查器。
+
+下一步：朋友试用验证，记录体验到 RUNNING_NOTES.md。

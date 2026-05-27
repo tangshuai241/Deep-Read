@@ -1,9 +1,10 @@
 {% extends "base.html" %}
+{% block title %}健康检查 — DeepRead Studio{% endblock %}
 {% block content %}
 <h1>健康检查</h1>
 
 <div class="doctor-actions">
-  <button class="btn-primary" onclick="runDoctor(false)">普通检查</button>
+  <button onclick="runDoctor(false)">普通检查</button>
   <button class="btn-deep" onclick="runDoctor(true)">深度检查</button>
   <span id="status-text" style="margin-left:12px;font-size:13px;color:#888"></span>
 </div>
@@ -12,28 +13,7 @@
 <pre id="output" class="doctor-output">点击按钮开始检查...</pre>
 
 <style>
-.doctor-actions { margin-bottom: 16px; display: flex; align-items: center; }
-.btn-primary, .btn-deep {
-  padding: 6px 16px; border: none; border-radius: 6px; cursor: pointer;
-  font-size: 14px; margin-right: 8px;
-}
-.btn-primary { background: #4a6fa5; color: #fff; }
-.btn-primary:hover { background: #3a5a85; }
-.btn-deep { background: #6a1b9a; color: #fff; }
-.btn-deep:hover { background: #5a0b8a; }
-.doctor-output {
-  background: #1e1e2e; color: #c0c0d0; border-radius: 8px;
-  padding: 16px; font-size: 13px; white-space: pre-wrap;
-  max-height: 600px; overflow-y: auto;
-}
-.doctor-summary {
-  background: #fff; border-radius: 8px; padding: 12px 16px;
-  margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-  font-size: 13px;
-}
-.summary-pass { color: #2e7d32; font-weight:600; }
-.summary-warn { color: #e65100; font-weight:600; }
-.summary-fail { color: #c62828; font-weight:600; }
+.doctor-actions { margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
 </style>
 
 <script>
@@ -50,10 +30,10 @@ function runDoctor(deep) {
     el.textContent = d.output || '无输出';
     sm.style.display = 'block';
 
-    var out = d.output || '';
-    var pass = (out.match(/PASS/g) || []).length;
-    var warn = (out.match(/WARN/g) || []).length;
-    var fail = (out.match(/FAIL/g) || []).length;
+    var c = d.counts || {};
+    var pass = c.pass || 0;
+    var warn = c.warn || 0;
+    var fail = c.fail || 0;
 
     var html = '<strong>检查结果: </strong>';
     html += '<span class="summary-pass">' + pass + ' PASS</span> ';

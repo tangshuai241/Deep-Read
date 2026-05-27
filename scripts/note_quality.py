@@ -261,6 +261,40 @@ def check_note(note_path, config=None):
             if not found:
                 warnings.append(f"概念链接 [[{link_target}]] 在 vault 中未找到对应文件")
 
+    # ── 12. 模式感知质量检查 ──
+    reading_mode = ""
+    if frontmatter:
+        reading_mode = parse_fm_value(frontmatter, "reading_mode")
+    if not reading_mode:
+        # 尝试从正文推断
+        if "考点" in body and "自测" in body:
+            reading_mode = "exam_mastery"
+        elif "行动清单" in body or "行动实验" in body:
+            reading_mode = "method_conversion"
+        elif "核心命题" in body and ("我的立场" in body or "反例" in body):
+            reading_mode = "proposition_dialogue"
+
+    if reading_mode == "exam_mastery":
+        has_self_test = bool(re.search(r"(自测题|自测|待复习|易错)", body))
+        if not has_self_test:
+            warnings.append("[考试模式] 缺少自测题或待复习内容")
+        has_exam_points = bool(re.search(r"(考点|核心理解|易错对比)", body))
+        if not has_exam_points:
+            suggestions.append("[考试模式] 建议增加考点梳理和核心理解段落")
+
+    elif reading_mode == "method_conversion":
+        has_action = bool(re.search(r"(行动清单|行动实验|改造方案|我的场景)", body))
+        if not has_action:
+            warnings.append("[方法模式] 缺少行动实验或行动清单")
+        has_method = bool(re.search(r"(方法提取|SOP|步骤|前提条件)", body))
+        if not has_method:
+            suggestions.append("[方法模式] 建议增加方法提取和前提条件说明")
+
+    elif reading_mode == "proposition_dialogue":
+        has_stance = bool(re.search(r"(我的立场|我的判断|反例|我不同|我同意)", body))
+        if not has_stance:
+            warnings.append("[命题模式] 缺少个人立场或反例")
+
     # ── 汇总评分 ──
     score = max(0, 100 - len(errors) * 15 - len(warnings) * 5)
     passed = len(errors) == 0

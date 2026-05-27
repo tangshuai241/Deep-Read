@@ -526,80 +526,10 @@ def cmd_quality(args):
 # Profile 管理命令
 # ═══════════════════════════════════════════════════════════════
 
-READING_MODES = {
-    "concept_deep_read": {
-        "name": "概念精读",
-        "desc": "四阶段费曼+苏格拉底+联想，适合概念密集型书籍",
-        "target": "理解核心概念及其认知机制",
-        "sections": ["引用原文", "我的理解", "让我想到", "待探索"],
-        "trial": True,
-        "suggest_patterns": ["思考快与慢", "认知", "心理学", "行为经济学",
-                            "思维", "判断", "决策", "思考"],
-    },
-    "proposition_dialogue": {
-        "name": "命题辨析",
-        "desc": "逐命题挑战和重构，适合观点型、哲学类书籍",
-        "target": "辨析命题的前提、边界和隐含假设",
-        "sections": ["核心命题", "作者论证", "我的质疑", "待探索"],
-        "trial": True,
-        "suggest_patterns": ["被讨厌的勇气", "哲学", "人生", "意义",
-                            "存在", "自由", "幸福", "勇气"],
-    },
-    "method_conversion": {
-        "name": "方法转化",
-        "desc": "提取方法→验证→改造→归档，适合工具书/方法论",
-        "target": "将书中方法转化为个人可执行的步骤",
-        "sections": ["方法提取", "前提条件", "我的场景", "改造方案", "行动清单"],
-        "trial": True,
-        "suggest_patterns": ["方法", "工具", "技巧", "指南", "手册",
-                            "How To", "搞定", "GTD", "效率"],
-    },
-    "exam_mastery": {
-        "name": "考试掌握",
-        "desc": "高频考点→理解→记忆→自测，适合教材/资格证考试",
-        "target": "掌握考点并能通过自测验证",
-        "sections": ["考点梳理", "核心理解", "易错对比", "自测题", "待复习"],
-        "trial": True,
-        "suggest_patterns": ["一级建造师", "考试", "教材", "资格证",
-                            "备考", "真题", "考点", "习题"],
-    },
-    "textbook_derivation": {
-        "name": "教材推导",
-        "desc": "逐章还原推导链，适合理论教材/数学/物理",
-        "target": "理解每一步推导的前提和逻辑",
-        "sections": ["推导链还原", "关键步理解", "边界条件", "课后验证"],
-        "trial": False,
-        "suggest_patterns": ["数学", "物理", "推导", "公式", "定理",
-                            "证明", "原理"],
-    },
-    "standard_lookup": {
-        "name": "规范检索",
-        "desc": "快速定位→理解条文→关联实际场景，适合工程规范/标准",
-        "target": "理解条文并能定位到实际工程场景",
-        "sections": ["条文定位", "条文理解", "工程场景", "边界说明"],
-        "trial": False,
-        "suggest_patterns": ["规范", "标准", "GB", "JT", "条文",
-                            "设计", "施工", "验收"],
-    },
-    "case_review": {
-        "name": "案例复盘",
-        "desc": "案例→决策链→替代方案→教训提炼，适合商业/工程案例",
-        "target": "从案例中提炼可复用的决策模式",
-        "sections": ["案例事实", "决策链还原", "替代方案", "教训提炼", "可复用原则"],
-        "trial": False,
-        "suggest_patterns": ["案例", "复盘", "事故", "失败", "教训",
-                            "项目", "实践"],
-    },
-    "literature_experience": {
-        "name": "文学体验",
-        "desc": "沉浸→感受→共鸣→表达，适合小说/散文/传记",
-        "target": "深度体验文本，形成个人化的感受和表达",
-        "sections": ["情境还原", "人物/主题理解", "我的共鸣", "延伸联想"],
-        "trial": False,
-        "suggest_patterns": ["小说", "散文", "传记", "文学", "故事",
-                            "回忆录", "随笔"],
-    },
-}
+# 阅读模式定义统一由 scripts/reading_modes.py 管理
+sys.path.insert(0, str(SCRIPTS_DIR))
+from reading_modes import (list_modes as _rm_list, suggest_mode as _rm_suggest,
+                           get_mode as _rm_get, allowed_modes as _rm_allowed)
 
 
 def _resolve_profile(config):
@@ -667,14 +597,16 @@ def cmd_modes(args):
 
 
 def _modes_list(is_trial=False):
+    profile = "trial" if is_trial else "personal"
+    mode_list = _rm_list(profile)
     print(f"可用阅读模式（{'Trial 体验版' if is_trial else 'Personal 完整版'}）:")
     print()
-    for key, mode in READING_MODES.items():
-        if is_trial and not mode["trial"]:
-            continue
-        print(f"  {key}")
-        print(f"    {mode['name']} — {mode['desc']}")
-        print(f"    目标: {mode['target']}")
+    for m in mode_list:
+        print(f"  {m['key']}")
+        print(f"    {m['name']} — {m['desc']}")
+        print(f"    目标: {m['target']}")
+        if m.get("sections"):
+            print(f"    笔记段落: {', '.join(m['sections'])}")
         print()
 
 
@@ -683,21 +615,11 @@ def _modes_suggest(book_hint, is_trial=False):
         print("请提供书名: python cli.py modes suggest \"书名\"")
         return
 
-    best_mode = None
-    best_score = 0
+    profile = "trial" if is_trial else "personal"
+    key, mode, score = _rm_suggest(book_hint, profile)
 
-    for key, mode in READING_MODES.items():
-        if is_trial and not mode["trial"]:
-            continue
-        score = sum(1 for p in mode.get("suggest_patterns", [])
-                   if p.lower() in book_hint.lower())
-        if score > best_score:
-            best_score = score
-            best_mode = key
-
-    if best_mode and best_score > 0:
-        mode = READING_MODES[best_mode]
-        print(f"《{book_hint}》建议使用: {mode['name']} ({best_mode})")
+    if score > 0:
+        print(f"《{book_hint}》建议使用: {mode['name']} ({key})")
         print(f"  原因: {mode['desc']}")
         print(f"  目标: {mode['target']}")
     else:
@@ -707,12 +629,12 @@ def _modes_suggest(book_hint, is_trial=False):
 
 
 def _modes_show(mode_key, is_trial=False):
-    if mode_key not in READING_MODES:
+    mode = _rm_get(mode_key)
+    if not mode:
         print(f"未知模式: {mode_key}")
         print(f"运行 python cli.py modes list 查看可用模式")
         return
 
-    mode = READING_MODES[mode_key]
     if is_trial and not mode["trial"]:
         print(f"{mode['name']} 在 Trial 版中不可用")
         return
@@ -720,7 +642,9 @@ def _modes_show(mode_key, is_trial=False):
     print(f"{mode['name']} ({mode_key})")
     print(f"  说明: {mode['desc']}")
     print(f"  目标: {mode['target']}")
-    print(f"  笔记段落: {', '.join(mode['sections'])}")
+    print(f"  笔记段落: {', '.join(mode.get('sections', []))}")
+    if mode.get("stage_notes"):
+        print(f"  追问方向: {mode['stage_notes']}")
     print()
 
 

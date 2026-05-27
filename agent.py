@@ -161,13 +161,14 @@ def load_system_prompt(config):
     with open(skill, encoding='utf-8') as f:
         prompt = f.read()
 
-    for ref in ["dialogue-flow.md", "note-format.md", "fsm-spec.md", "learning-contract.md"]:
+    for ref in ["dialogue-flow.md", "note-format.md", "fsm-spec.md", "learning-contract.md", "reading-modes.md"]:
         rp = skill_dir / "references" / ref
         if rp.exists():
             with open(rp, encoding='utf-8') as f:
                 prompt += f"\n\n---\n## {ref}\n\n{f.read()}"
 
-    prompt += "\n\n重要：你必须调用工具来操作数据。不知道 EPUB 内容→调 extract_epub。不要直接写笔记→调 write_note。不知道状态→调 read_state。不知道学习路线/阶段是否通过→调 learning_contract。搜索知识库→调 search_vault。"
+    prompt += "\n\n重要：你必须调用工具来操作数据。不知道 EPUB 内容→调 extract_epub。不要直接写笔记→调 write_note。不知道状态→调 read_state。不知道学习路线/阶段是否通过→调 learning_contract。搜索知识库→调 search_vault。判断或切换阅读模式→调 reading_mode。"
+    prompt += "\n\n阅读模式规则：用户开始读一本新书时，先用 reading_mode suggest 判断适合的模式。判断明确时直接进入，不多问。不确定时只问一个选择问题。用户说'考试模式''工具书模式''概念精读模式'时用户优先，立刻切换。切换模式后必须立即调用 learning_contract init/update 写入契约（用到 reading_mode set 返回的 reading_mode/mode_reason 等字段），并简短说明'接下来我会按XX方式带你读'。reading_mode set 本身不写契约，必须紧接着调用 learning_contract。"
     return prompt
 
 
@@ -251,6 +252,8 @@ def execute_tool(name, params, user_id="default"):
         if action == "init":
             for key, flag in [("book", "--book"), ("chapter", "--chapter"),
                               ("section", "--section"), ("goal", "--goal"),
+                              ("profile", "--profile"), ("book_type", "--book-type"),
+                              ("reading_mode", "--reading-mode"), ("mode_reason", "--mode-reason"),
                               ("A_core", "--A_core"), ("B_important", "--B_important"),
                               ("C_evidence", "--C_evidence"), ("D_application", "--D_application")]:
                 if key in p and p[key]:
@@ -270,12 +273,78 @@ def execute_tool(name, params, user_id="default"):
         elif action not in ("show", "report"):
             return json.dumps({"ok": False, "error": f"未知 learning_contract action: {action}"}, ensure_ascii=False)
         return run_script("learning_contract.py", *global_args, action, *args)
+    elif name == "reading_mode":
+        return execute_reading_mode(p)
     return json.dumps({"ok": False, "error": f"未知工具: {name}"})
 
 
-# ═══════════════════════════════════════════════════════
+def execute_reading_mode(p):
+    """执行 reading_mode 工具调用"""
+    action = p.get("action", "suggest")
+    text = p.get("text", "")
+    mode_key = p.get("mode", "")
+    profile = p.get("profile", "personal")
+
+    try:
+        from scripts.reading_modes import (suggest_mode, get_mode, list_modes,
+                                           allowed_modes, mode_hint_text, MODE_QUICK_NAMES)
+    except ImportError:
+        return json.dumps({"ok": False, "error": "reading_modes 模块不可用"}, ensure_ascii=False)
+
+    if action == "suggest":
+        key, mode_def, score = suggest_mode(text, profile)
+        return json.dumps({
+            "ok": True, "action": "suggest",
+            "reading_mode": key, "mode_name": mode_def["name"],
+            "mode_desc": mode_def["desc"], "score": score,
+            "mode_reason": mode_def["desc"] if score > 0 else "默认使用概念精读",
+            "sections": mode_def.get("sections", []),
+            "hint": mode_hint_text(key),
+        }, ensure_ascii=False)
+
+    elif action == "show":
+        mode_def = get_mode(mode_key) if mode_key else None
+        if not mode_def:
+            return json.dumps({"ok": False, "error": f"未知模式: {mode_key}",
+                               "available": allowed_modes(profile)}, ensure_ascii=False)
+        return json.dumps({
+            "ok": True, "action": "show",
+            "reading_mode": mode_key, "mode_name": mode_def["name"],
+            "mode_desc": mode_def["desc"], "sections": mode_def.get("sections", []),
+            "hint": mode_hint_text(mode_key),
+        }, ensure_ascii=False)
+
+    elif action == "set":
+        return json.dumps({
+            "ok": True, "action": "set",
+            "reading_mode": mode_key,
+            "message": f"已设置为 {mode_key} 模式。请通过 learning_contract init 写入契约。",
+            "hint": mode_hint_text(mode_key) if mode_key else "",
+        }, ensure_ascii=False)
+
+    elif action == "list":
+        modes = list_modes(profile)
+        return json.dumps({"ok": True, "action": "list", "profile": profile,
+                           "modes": [{"key": m["key"], "name": m["name"]} for m in modes]},
+                          ensure_ascii=False)
+
+    # 快捷名称匹配
+    clean = text.strip()
+    if clean in MODE_QUICK_NAMES:
+        key = MODE_QUICK_NAMES[clean]
+        mode_def = get_mode(key)
+        return json.dumps({
+            "ok": True, "action": "quick_match",
+            "reading_mode": key, "mode_name": mode_def["name"],
+            "hint": f"匹配到 {mode_def['name']} 模式，请用 action='set' 确认切换",
+        }, ensure_ascii=False)
+
+    return json.dumps({"ok": False, "error": f"未知 reading_mode action: {action}"}, ensure_ascii=False)
+
+
+# ═══════════════════════════════════════════════════════════
 # 工具定义（两种格式）
-# ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
 TOOLS_ANTHROPIC = [
     {
@@ -356,6 +425,10 @@ TOOLS_ANTHROPIC = [
                 "chapter": {"type": "string"},
                 "section": {"type": "string"},
                 "goal": {"type": "string"},
+                "profile": {"type": "string", "description": "trial 或 personal"},
+                "book_type": {"type": "string", "description": "书籍类型，如 方法工具型/概念思想型"},
+                "reading_mode": {"type": "string", "description": "阅读模式键名"},
+                "mode_reason": {"type": "string", "description": "模式选择依据"},
                 "A_core": {"type": "array", "items": {"type": "string"}, "description": "必须掌握的核心机制"},
                 "B_important": {"type": "array", "items": {"type": "string"}, "description": "重要但可抽样讨论的概念/表现/对比"},
                 "C_evidence": {"type": "array", "items": {"type": "string"}, "description": "实验、例子、数据、作者论据"},
@@ -368,6 +441,20 @@ TOOLS_ANTHROPIC = [
                 "deposit": {"type": "string", "enum": ["understanding", "associations", "explore"]},
                 "note": {"type": "string", "description": "相关笔记路径"},
                 "stage": {"type": "string", "enum": ["feynman", "socratic", "associate", "wrapup"]}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "reading_mode",
+        "description": "判断/切换/查看阅读模式。用户开始读一本新书时先用 suggest 判断模式；用户要求切换时用 set；查看当前可用模式时用 list。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["suggest", "show", "set", "list"]},
+                "text": {"type": "string", "description": "书名、章节描述或用户输入（suggest 时使用）"},
+                "mode": {"type": "string", "description": "模式键名（set/show 时使用）"},
+                "profile": {"type": "string", "description": "trial 或 personal，默认 personal"}
             },
             "required": ["action"]
         }

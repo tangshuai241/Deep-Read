@@ -165,15 +165,12 @@ function refreshStatus() {
   // Bot 状态
   fetch('/api/bot/status').then(r => r.json()).then(d => {
     var el = document.getElementById('bot-status');
-    var out = d.output || d.stderr || '';
-    if (out.indexOf('STALE') >= 0 || out.indexOf('陈旧') >= 0) {
+    if (d.stale) {
       el.innerHTML = '<span class="badge warn">锁文件异常</span>';
-    } else if (out.indexOf('OK') >= 0 || out.indexOf('运行中') >= 0) {
+    } else if (d.running) {
       el.innerHTML = '<span class="badge ok">运行中</span>';
-    } else if (out.indexOf('未在运行') >= 0 || out.indexOf('无锁文件') >= 0) {
-      el.innerHTML = '<span class="badge stage-idle">未运行</span>';
     } else {
-      el.innerHTML = '<span class="badge stage-idle">未知</span>';
+      el.innerHTML = '<span class="badge stage-idle">未运行</span>';
     }
   }).catch(() => {
     document.getElementById('bot-status').innerHTML = '<span class="badge stage-idle">检查失败</span>';
@@ -181,10 +178,10 @@ function refreshStatus() {
 
   // Doctor 快速检查
   fetch('/api/doctor').then(r => r.json()).then(d => {
-    var out = d.output || '';
-    var matchP = (out.match(/PASS/g) || []).length;
-    var matchW = (out.match(/WARN/g) || []).length;
-    var matchF = (out.match(/FAIL/g) || []).length;
+    var c = d.counts || {};
+    var matchP = c.pass || 0;
+    var matchW = c.warn || 0;
+    var matchF = c.fail || 0;
     var el = document.getElementById('doctor-summary');
     var parts = [];
     if (matchP) parts.push(matchP + ' PASS');

@@ -29,9 +29,24 @@ def render(name, ctx):
 
 # ── helpers ────────────────────────────────────────
 def load_config():
-    with open(BASE / "config.yaml", encoding="utf-8") as f:
-        import yaml; return yaml.safe_load(f)
-    return {}
+    try:
+        with open(BASE / "config.yaml", encoding="utf-8") as f:
+            import yaml; return yaml.safe_load(f) or {}
+    except (FileNotFoundError, PermissionError):
+        return {}
+
+def _allowed_path(path: str) -> bool:
+    """限制文件访问范围：notes_dir / vault_dir / deepread 项目目录"""
+    if not path:
+        return False
+    resolved = os.path.realpath(path)
+    config = load_config()
+    allowed_roots = [str(BASE)]
+    for key in ("notes_dir", "vault_dir", "books_dir"):
+        p = config.get("paths", {}).get(key, "")
+        if p:
+            allowed_roots.append(os.path.realpath(p))
+    return any(resolved.startswith(root) for root in allowed_roots)
 
 def load_state():
     p = BASE / "state" / "default" / "current.json"
@@ -68,7 +83,7 @@ def list_notes(base_dir):
                             if ":" in line:
                                 k, v = line.split(":", 1)
                                 fm[k.strip()] = v.strip()
-            except: pass
+            except Exception: pass
             notes.append({
                 "path": fp, "rel": rel, "book": book, "name": f.replace(".md", ""),
                 "mtime": mtime, "fm": fm
@@ -164,7 +179,7 @@ def list_claude_sessions():
                     "updated": ts, "source": "claude",
                     "msg_count": len(lines)
                 })
-            except: pass
+            except Exception: pass
     return sorted(all_sess, key=lambda x: x["updated"], reverse=True)
 
 def load_session(sid):
@@ -321,6 +336,8 @@ def notes_page(request: Request, dir: str = ""):
 def note_view(request: Request, path: str = ""):
     if not path or not os.path.exists(path):
         return HTMLResponse("笔记不存在", 404)
+    if not _allowed_path(path):
+        return HTMLResponse("路径不在允许范围内", 403)
     data = parse_note_content(path)
     stats = note_stats(path)
     return render("note_detail.html", {
@@ -331,6 +348,10 @@ def note_view(request: Request, path: str = ""):
 @app.get("/compare", response_class=HTMLResponse)
 def compare_page(request: Request,
                   left_dir: str = "", right_dir: str = ""):
+    if left_dir and not _allowed_path(left_dir):
+        return HTMLResponse("左侧路径不在允许范围内", 403)
+    if right_dir and not _allowed_path(right_dir):
+        return HTMLResponse("右侧路径不在允许范围内", 403)
     left_notes = list_notes(left_dir) if left_dir else []
     right_notes = list_notes(right_dir) if right_dir else []
     return render("compare.html", {
@@ -428,7 +449,10 @@ def api_doctor(deep: int = Query(0)):
         cmd, capture_output=True, text=True, encoding="utf-8", timeout=30,
         env={**os.environ, "PYTHONIOENCODING": "utf-8"}
     )
-    return {"ok": r.returncode == 0, "output": r.stdout, "deep": bool(deep)}
+    # 从摘要行解析结构化计数，避免前端 regex 歧义
+    m = re.search(r'(\d+)\s+PASS,\s*(\d+)\s+WARN,\s*(\d+)\s+FAIL', r.stdout)
+    counts = {"pass": int(m.group(1)), "warn": int(m.group(2)), "fail": int(m.group(3))} if m else {}
+    return {"ok": r.returncode == 0, "output": r.stdout, "deep": bool(deep), "counts": counts}
 
 
 # ── Bot API ──
@@ -445,7 +469,26 @@ def _run_bot_cmd(args):
 
 @app.get("/api/bot/status")
 def api_bot_status():
-    return _run_bot_cmd(["status"])
+    lock_path = BASE / "state" / "feishu_bot.listen.lock"
+    if not lock_path.exists():
+        return {"ok": True, "running": False, "stale": False, "pid": None}
+    try:
+        with open(lock_path, encoding="utf-8") as f:
+            lock = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {"ok": True, "running": False, "stale": False, "pid": None}
+    pid = int(lock.get("pid", 0))
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    running = handle != 0
+    if handle:
+        kernel32.CloseHandle(handle)
+    return {
+        "ok": True, "running": running, "stale": not running and pid > 0,
+        "pid": pid, "started_at": lock.get("started_at", ""),
+        "reply": lock.get("reply", False)
+    }
 
 
 @app.post("/api/bot/start")
@@ -487,6 +530,8 @@ def api_bot_restart(data: dict = None):
 def api_quality(path: str = Query("")):
     if not path or not os.path.exists(path):
         return JSONResponse({"ok": False, "error": "路径不存在"}, 400)
+    if not _allowed_path(path):
+        return JSONResponse({"ok": False, "error": "路径不在允许范围内"}, 403)
     import subprocess
     r = subprocess.run(
         [sys.executable, str(SCRIPTS / "note_quality.py"), "--path", path, "--json"],

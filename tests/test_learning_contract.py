@@ -1,4 +1,5 @@
 """测试章节学习契约。"""
+import json
 import tempfile
 from pathlib import Path
 import sys
@@ -10,10 +11,15 @@ import learning_contract as lc
 class Args:
     def __init__(self, **kwargs):
         self.user = kwargs.pop("user", "default")
+        self.json = kwargs.pop("json", False)
         self.book = kwargs.pop("book", "")
         self.chapter = kwargs.pop("chapter", "")
         self.section = kwargs.pop("section", "")
         self.goal = kwargs.pop("goal", "理解")
+        self.profile = kwargs.pop("profile", "personal")
+        self.book_type = kwargs.pop("book_type", "")
+        self.reading_mode = kwargs.pop("reading_mode", "concept_deep_read")
+        self.mode_reason = kwargs.pop("mode_reason", "")
         self.A_core = kwargs.pop("A_core", "")
         self.B_important = kwargs.pop("B_important", "")
         self.C_evidence = kwargs.pop("C_evidence", "")
@@ -122,3 +128,45 @@ def test_report_lists_missing_a_core_as_explore(monkeypatch):
         assert report["ok"] is True
         assert report["missing_a_core"] == ["确认偏误"]
         assert "继续澄清：确认偏误" in report["suggested_explore"]
+
+
+def test_init_contract_includes_reading_mode_fields(monkeypatch):
+    with with_temp_state(monkeypatch):
+        result = lc.init_contract(Args(
+            book="测试书", chapter="1",
+            reading_mode="exam_mastery",
+            book_type="教材型",
+            mode_reason="用户说这是一级建造师",
+            profile="trial",
+        ))
+        assert result["ok"]
+        contract = result["contract"]
+        assert contract["profile"] == "trial"
+        assert contract["scope"]["reading_mode"] == "exam_mastery"
+        assert contract["scope"]["book_type"] == "教材型"
+        assert contract["scope"]["mode_reason"] == "用户说这是一级建造师"
+
+
+def test_show_contract_json_serializable(monkeypatch):
+    with with_temp_state(monkeypatch):
+        lc.init_contract(Args(book="JSON测试", chapter="3", reading_mode="method_conversion",
+                              profile="personal", book_type="方法工具型"))
+        contract = lc.load_contract()
+
+        assert contract["scope"]["reading_mode"] == "method_conversion"
+        assert contract["profile"] == "personal"
+        assert contract["scope"]["book_type"] == "方法工具型"
+        # 确保能序列化为 JSON
+        json_str = json.dumps(contract, ensure_ascii=False)
+        parsed = json.loads(json_str)
+        assert parsed["scope"]["reading_mode"] == "method_conversion"
+
+
+def test_default_contract_missing_reading_mode_defaults_to_concept_deep_read(monkeypatch):
+    with with_temp_state(monkeypatch):
+        # 模拟旧契约：缺 reading_mode 字段
+        contract = lc.default_contract("旧书", "5", "", "理解")
+        path = lc.save_contract(contract, user="test_legacy")
+        loaded = lc.load_contract(user="test_legacy")
+        assert loaded["scope"].get("reading_mode", "concept_deep_read") == "concept_deep_read"
+        assert loaded["version"] == "1.1"

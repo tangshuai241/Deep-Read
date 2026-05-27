@@ -93,16 +93,22 @@ def normalize_points(raw):
     return result
 
 
-def default_contract(book="", chapter="", section="", goal="理解"):
+def default_contract(book="", chapter="", section="", goal="理解",
+                     profile="personal", book_type="", reading_mode="concept_deep_read",
+                     mode_reason=""):
     return {
-        "version": "1.0",
+        "version": "1.1",
         "created_at": now_iso(),
         "updated_at": now_iso(),
+        "profile": profile,
         "scope": {
             "book": book or "",
             "chapter": chapter or "",
             "section": section or "",
             "goal": goal or "理解",
+            "book_type": book_type or "",
+            "reading_mode": reading_mode or "concept_deep_read",
+            "mode_reason": mode_reason or "",
         },
         "knowledge_map": {
             "A_core": [],
@@ -143,7 +149,13 @@ def save_contract(contract, user="default"):
 
 
 def init_contract(args):
-    contract = default_contract(args.book, args.chapter, args.section, args.goal)
+    contract = default_contract(
+        args.book, args.chapter, args.section, args.goal,
+        profile=getattr(args, "profile", "personal"),
+        book_type=getattr(args, "book_type", ""),
+        reading_mode=getattr(args, "reading_mode", "concept_deep_read"),
+        mode_reason=getattr(args, "mode_reason", ""),
+    )
     for group in POINT_GROUPS:
         contract["knowledge_map"][group] = normalize_points(getattr(args, group))
     path = save_contract(contract, args.user)
@@ -367,19 +379,20 @@ def build_parser():
     sub = parser.add_subparsers(dest="command")
 
     p_init = sub.add_parser("init", help="初始化学习契约")
-    p_init.add_argument("--json", action="store_true", help="JSON 输出")
     p_init.add_argument("--book", default="")
     p_init.add_argument("--chapter", default="")
     p_init.add_argument("--section", default="")
     p_init.add_argument("--goal", default="理解")
+    p_init.add_argument("--profile", default="personal", choices=("trial", "personal"))
+    p_init.add_argument("--book-type", default="", help="书籍类型，如 方法工具型/概念思想型")
+    p_init.add_argument("--reading-mode", default="concept_deep_read", help="阅读模式键名")
+    p_init.add_argument("--mode-reason", default="", help="模式选择依据")
     for group in POINT_GROUPS:
         p_init.add_argument(f"--{group}", default="", help="逗号分隔或 JSON 数组")
 
     p_show = sub.add_parser("show", help="显示当前学习契约")
-    p_show.add_argument("--json", action="store_true", help="JSON 输出")
 
     p_update = sub.add_parser("update", help="更新知识点、阶段事件或笔记沉淀")
-    p_update.add_argument("--json", action="store_true", help="JSON 输出")
     p_update.add_argument("--point", default="", help="知识点标题")
     p_update.add_argument("--group", default="B_important", choices=POINT_GROUPS)
     p_update.add_argument("--status", default="", choices=sorted(VALID_STATUSES))
@@ -389,11 +402,9 @@ def build_parser():
     p_update.add_argument("--note", default="", help="相关笔记路径")
 
     p_check = sub.add_parser("check", help="检查阶段是否达到通过条件")
-    p_check.add_argument("--json", action="store_true", help="JSON 输出")
     p_check.add_argument("--stage", required=True, choices=("feynman", "socratic", "associate", "wrapup"))
 
     p_report = sub.add_parser("report", help="生成学习覆盖报告")
-    p_report.add_argument("--json", action="store_true", help="JSON 输出")
     return parser
 
 
