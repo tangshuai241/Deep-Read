@@ -153,6 +153,39 @@ def test_tolerant_reader_parses_ncx_with_chinese_chapter():
         os.unlink(epub_path)
 
 
+def test_ncx_preface_does_not_steal_explicit_chapter_numbers():
+    epub_path = _write_zip_epub({
+        "META-INF/container.xml": _minimal_container(),
+        "OEBPS/content.opf": _minimal_opf(
+            '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'
+            '<item id="intro" href="intro.xhtml" media-type="application/xhtml+xml"/>'
+            '<item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>'
+            '<item id="c2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>'
+        ),
+        "OEBPS/toc.ncx": """<ncx><navMap>
+          <navPoint><navLabel><text>主目录</text></navLabel><content src="toc.xhtml"/></navPoint>
+          <navPoint><navLabel><text>前言</text></navLabel><content src="preface.xhtml"/></navPoint>
+          <navPoint><navLabel><text>引子</text></navLabel><content src="intro.xhtml"/></navPoint>
+          <navPoint><navLabel><text>第一章 童年</text></navLabel><content src="chapter1.xhtml"/></navPoint>
+          <navPoint><navLabel><text>第二章 灾难</text></navLabel><content src="chapter2.xhtml"/></navPoint>
+        </navMap></ncx>""",
+        "OEBPS/toc.xhtml": "<html><body><h1>主目录</h1></body></html>",
+        "OEBPS/preface.xhtml": "<html><body><h1>前言</h1><p>前言内容足够长，不应该抢第一章编号。</p></body></html>",
+        "OEBPS/intro.xhtml": "<html><body><h1>引子</h1><p>引子内容足够长，也不应该抢章节编号。</p></body></html>",
+        "OEBPS/chapter1.xhtml": "<html><body><h1>第一章 童年</h1><p>童年正文内容足够长，应该被 chapter 1 命中。</p></body></html>",
+        "OEBPS/chapter2.xhtml": "<html><body><h1>第二章 灾难</h1><p>灾难正文内容足够长，应该被 chapter 2 命中。</p></body></html>",
+    })
+    try:
+        book = read_epub_tolerant(epub_path)
+        ncx = parse_ncx(book)
+        chapters = [e for e in ncx if e["is_chapter"]]
+        assert [e["title"] for e in chapters] == ["第一章 童年", "第二章 灾难"]
+        assert find_chapter(ncx, "1")["title"] == "第一章 童年"
+        assert find_chapter(ncx, "2")["title"] == "第二章 灾难"
+    finally:
+        os.unlink(epub_path)
+
+
 def test_tolerant_reader_falls_back_to_nav_xhtml():
     epub_path = _write_zip_epub({
         "META-INF/container.xml": _minimal_container(),

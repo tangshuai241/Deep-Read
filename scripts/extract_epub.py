@@ -287,6 +287,28 @@ def _entry_from_title_file(title, fname, fallback_num=None):
     }
 
 
+def _number_entries_when_needed(entries):
+    """仅在目录完全没有明确“第X章”时，才给普通内容页自动编号。
+
+    许多 EPUB 的目录前面有“主目录/前言/分卷页/引子”，后面才是“第一章”。
+    如果一边有明确章节号，一边又给前言自动编号，就会导致 --chapter 1
+    命中“主目录/前言”，而不是真正的“第一章”。
+    """
+    if any(entry.get("is_chapter") and entry.get("chapter_num") is not None for entry in entries):
+        return entries
+
+    numbered = []
+    chapter_idx = 0
+    for entry in entries:
+        if not entry.get("is_part") and _looks_like_content_file(entry.get("file", "")):
+            chapter_idx += 1
+            entry = dict(entry)
+            entry["is_chapter"] = True
+            entry["chapter_num"] = chapter_idx
+        numbered.append(entry)
+    return numbered
+
+
 def _normalize_epub_ref(ref):
     return urllib.parse.unquote((ref or "").split("#")[0])
 
@@ -299,19 +321,12 @@ def parse_ncx(book):
         if 'ncx' in item.get_name().lower():
             raw = _decode_bytes(item.get_content())
             entries = []
-            chapter_idx = 0
             for m in NCX_ENTRY_PATTERN.finditer(raw):
                 title = m.group(1).strip()
                 fname = _normalize_epub_ref(m.group(2))
-                entry = _entry_from_title_file(title, fname)
-                if not entry["is_chapter"] and _looks_like_content_file(fname):
-                    chapter_idx += 1
-                    entry = _entry_from_title_file(title, fname, fallback_num=chapter_idx)
-                elif entry["is_chapter"] and entry["chapter_num"]:
-                    chapter_idx = max(chapter_idx, entry["chapter_num"])
-                entries.append(entry)
+                entries.append(_entry_from_title_file(title, fname))
             if entries:
-                return entries
+                return _number_entries_when_needed(entries)
     return parse_nav_or_spine(book)
 
 
@@ -336,21 +351,14 @@ def parse_nav_xhtml(book):
         if not nav:
             continue
         entries = []
-        chapter_idx = 0
         for a in nav.find_all("a"):
             title = a.get_text(" ", strip=True)
             href = _normalize_epub_ref(a.get("href", ""))
             if not title or not href:
                 continue
-            entry = _entry_from_title_file(title, href)
-            if not entry["is_chapter"] and _looks_like_content_file(href):
-                chapter_idx += 1
-                entry = _entry_from_title_file(title, href, fallback_num=chapter_idx)
-            elif entry["is_chapter"] and entry["chapter_num"]:
-                chapter_idx = max(chapter_idx, entry["chapter_num"])
-            entries.append(entry)
+            entries.append(_entry_from_title_file(title, href))
         if entries:
-            return entries
+            return _number_entries_when_needed(entries)
     return []
 
 
@@ -360,30 +368,21 @@ def parse_spine(book):
     if not spine:
         return []
     entries = []
-    chapter_idx = 0
     for file_name in spine:
         text = get_content_for_file(book, file_name)
         if not text or len(text.strip()) < 20:
             continue
-        title = infer_title_from_file(book, file_name) or f"第{chapter_idx + 1}章"
+        title = infer_title_from_file(book, file_name) or Path(file_name).stem
         if PART_PATTERN.match(title):
             entries.append(_entry_from_title_file(title, file_name))
             continue
-        cm = CHAPTER_PATTERN.match(title)
-        if cm:
-            entry = _entry_from_title_file(title, file_name)
-            chapter_idx = max(chapter_idx, entry["chapter_num"] or chapter_idx)
-        else:
-            chapter_idx += 1
-            entry = _entry_from_title_file(title, file_name, fallback_num=chapter_idx)
-        entries.append(entry)
-    return entries
+        entries.append(_entry_from_title_file(title, file_name))
+    return _number_entries_when_needed(entries)
 
 
 def synthesize_chapters_from_items(book):
     """最后兜底：从所有文本文件中合成章节列表。"""
     entries = []
-    chapter_idx = 0
     for item in book.get_items():
         name = item.get_name()
         lower = name.lower()
@@ -398,15 +397,8 @@ def synthesize_chapters_from_items(book):
         if PART_PATTERN.match(title):
             entries.append(_entry_from_title_file(title, name))
             continue
-        cm = CHAPTER_PATTERN.match(title)
-        if cm:
-            entry = _entry_from_title_file(title, name)
-            chapter_idx = max(chapter_idx, entry["chapter_num"] or chapter_idx)
-        else:
-            chapter_idx += 1
-            entry = _entry_from_title_file(title, name, fallback_num=chapter_idx)
-        entries.append(entry)
-    return entries
+        entries.append(_entry_from_title_file(title, name))
+    return _number_entries_when_needed(entries)
 
 
 def infer_title_from_file(book, file_name):
