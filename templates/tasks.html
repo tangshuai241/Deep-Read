@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}阅读任务 — DeepRead Studio{% endblock %}
+{% block content %}
+<h1>阅读任务</h1>
+<p class="page-hint">所有用户的阅读契约状态</p>
+
+{% if tasks %}
+<div style="overflow-x:auto">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>用户</th>
+      <th>Profile</th>
+      <th>书名</th>
+      <th>章节</th>
+      <th>阅读模式</th>
+      <th>类型</th>
+      <th>A核心</th>
+      <th>B重要</th>
+      <th>C证据</th>
+      <th>D应用</th>
+      <th>目标</th>
+      <th>最后更新</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for t in tasks %}
+  <tr>
+    <td>{{ t.user_label }}</td>
+    <td>{{ t.profile or '—' }}</td>
+    <td><strong>{{ t.book }}</strong></td>
+    <td>{{ t.chapter }}</td>
+    <td><span class="tag">{{ t.mode_name or t.reading_mode or '—' }}</span></td>
+    <td>{{ t.book_type or '—' }}</td>
+    <td>{{ t.A_core }}</td>
+    <td>{{ t.B_important }}</td>
+    <td>{{ t.C_evidence }}</td>
+    <td>{{ t.D_application }}</td>
+    <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ t.goal }}">{{ t.goal or '—' }}</td>
+    <td style="font-size:11px;color:#888;white-space:nowrap">{{ t.updated[:16] if t.updated else '—' }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">暂无阅读任务。用户在飞书开始精读后会自动出现。</p>
+{% endif %}
+{% endblock %}

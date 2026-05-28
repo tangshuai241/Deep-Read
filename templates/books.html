@@ -4,6 +4,15 @@
 <h1>书籍导入检查</h1>
 <p class="page-hint">目录: <code>{{ books_dir }}</code></p>
 
+<section class="ops-card">
+  <h2>上传 EPUB</h2>
+  <div class="upload-area" id="uploadArea">
+    <input type="file" id="epubFile" accept=".epub" onchange="uploadEpub()" style="display:none">
+    <div class="upload-hint" onclick="document.getElementById('epubFile').click()">拖拽 EPUB 文件到此处，或点击选择</div>
+    <div id="uploadStatus" style="display:none"></div>
+  </div>
+</section>
+
 <div class="ops-grid">
   <section class="ops-card">
     <h2>EPUB 文件</h2>
@@ -79,6 +88,48 @@ function inspectBook(book) {
 function escapeHtml(text) {
   return String(text || '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[s]));
 }
+
+function uploadEpub() {
+  var file = document.getElementById('epubFile').files[0];
+  if (!file) return;
+  var status = document.getElementById('uploadStatus');
+  status.style.display = 'block';
+  status.textContent = '上传中...';
+  var fd = new FormData();
+  fd.append('file', file);
+  fetch('/api/books/upload', {method: 'POST', body: fd}).then(r => r.json()).then(d => {
+    if (!d.ok) { status.innerHTML = '<div class="fail-line">' + escapeHtml(d.error) + '</div>'; return; }
+    var insp = d.inspect || {};
+    var book = insp.book || {};
+    var toc = insp.toc || {};
+    var stats = toc.stats || {};
+    status.innerHTML = '<div class="ok-line">上传成功: ' + escapeHtml(d.filename) + '</div>' +
+      '<div class="kv compact" style="margin-top:8px">' +
+      '<div><span>书名</span><strong>' + escapeHtml(book.title || '—') + '</strong></div>' +
+      '<div><span>章节</span><strong>' + (stats.chapter_count || 0) + '</strong></div>' +
+      '<div><span>异常</span><strong>' + (stats.empty_chapter_count||0) + ' 空 · ' + (stats.short_chapter_count||0) + ' 短</strong></div>' +
+      '</div>';
+    setTimeout(function() { location.reload(); }, 2000);
+  }).catch(function(e) {
+    status.innerHTML = '<div class="fail-line">上传失败: ' + escapeHtml(String(e)) + '</div>';
+  });
+}
+
+// 拖拽支持
+(function() {
+  var area = document.getElementById('uploadArea');
+  area.addEventListener('dragover', function(e) { e.preventDefault(); area.classList.add('dragover'); });
+  area.addEventListener('dragleave', function() { area.classList.remove('dragover'); });
+  area.addEventListener('drop', function(e) {
+    e.preventDefault();
+    area.classList.remove('dragover');
+    var files = e.dataTransfer.files;
+    if (files.length) {
+      document.getElementById('epubFile').files = files;
+      uploadEpub();
+    }
+  });
+})();
 
 {% if selected_book %}
 inspectBook({{ selected_book | tojson }});

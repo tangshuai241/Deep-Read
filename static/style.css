@@ -160,3 +160,14 @@ button.book-row:hover { background: #eef; }
   nav .nav-links { display: none; position: absolute; top: 48px; left: 0; right: 0; background: var(--c-nav); flex-direction: column; padding: 12px 24px; gap: 12px; z-index: 100; }
   nav.open .nav-links { display: flex; }
 }
+
+/* security banner */
+.security-banner { padding: 8px 24px; font-size: 13px; text-align: center; font-weight: 600; }
+.security-banner.danger { background: #c62828; color: #fff; }
+.security-banner.warn { background: #fff3e0; color: var(--c-warn); border-bottom: 1px solid #ffcc80; }
+
+/* upload */
+.upload-area { border: 2px dashed #ddd; border-radius: var(--radius); padding: 24px; text-align: center; transition: border-color .2s; margin-bottom: 12px; }
+.upload-area.dragover { border-color: var(--c-primary); background: #eef3ff; }
+.upload-hint { color: var(--c-muted); cursor: pointer; font-size: 14px; }
+.upload-hint:hover { color: var(--c-primary); }

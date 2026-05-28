@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Bot 日志 — DeepRead Studio{% endblock %}
+{% block content %}
+<h1>Bot 日志</h1>
+<p class="page-hint">NDJSON 格式运行日志 · 最新在前</p>
+
+<div class="ops-grid">
+  <section class="ops-card">
+    <h2>日志文件</h2>
+    <div class="compact-list">
+      {% for f in log_files %}
+      <button class="compact-row book-row {% if selected_file == f.name %}active{% endif %}" onclick="loadLog('{{ f.name }}')">
+        <span class="row-main">{{ f.name }}</span>
+        <span class="row-meta">{{ f.size_str }} · {{ f.mtime[:16] }}</span>
+      </button>
+      {% endfor %}
+      {% if not log_files %}
+      <p class="empty">暂无日志文件</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="ops-card">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <h2 style="margin:0;flex:1">日志内容</h2>
+      <select id="filterUser" onchange="loadLog(currentFile)" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px">
+        <option value="">全部用户</option>
+        {% for u in users %}
+        <option value="{{ u.id }}">{{ u.label }}</option>
+        {% endfor %}
+      </select>
+      <label style="font-size:12px"><input type="checkbox" id="filterError" onchange="loadLog(currentFile)"> 仅错误</label>
+      <label style="font-size:12px"><input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()"> 自动刷新</label>
+      <span id="entryCount" style="font-size:12px;color:#888"></span>
+    </div>
+    <div id="logView" class="mini-output" style="max-height:600px;overflow:auto">选择日志文件查看</div>
+  </section>
+</div>
+
+<script>
+var currentFile = {{ selected_file | tojson }} || '';
+var refreshTimer = null;
+var reverseOrder = true;
+
+function loadLog(filename) {
+  if (!filename) return;
+  currentFile = filename;
+  var user = document.getElementById('filterUser').value;
+  var errOnly = document.getElementById('filterError').checked ? '1' : '';
+  var params = new URLSearchParams({file: filename, limit: 200});
+  if (user) params.set('user', user);
+  if (errOnly) params.set('error', errOnly);
+
+  fetch('/api/logs/view?' + params.toString()).then(r => r.json()).then(d => {
+    var el = document.getElementById('logView');
+    if (!d.ok || !d.entries || !d.entries.length) {
+      el.textContent = '暂无匹配记录';
+      document.getElementById('entryCount').textContent = '0 条';
+      return;
+    }
+    var entries = reverseOrder ? d.entries.slice().reverse() : d.entries;
+    var html = entries.map(function(e) {
+      var ts = (e.ts || '').substring(11, 19);
+      var type = e.type || '';
+      var color = type === 'tool_call' ? '#85c1e9' : type === 'api_call' ? '#82e0aa' : '#ccc';
+      var line = '<span style="color:#888">' + ts + '</span> ';
+      line += '<span style="color:' + color + '">[' + type + ']</span> ';
+      if (e.user_id) line += '<span style="color:#aaa">' + (e.user_id.substring(0,10) || '') + '</span> ';
+      if (e.tool) line += '<span style="color:#f9e79f">' + e.tool + '</span> ';
+      if (e.model) line += '<span style="color:#aaa">' + e.model + '</span> ';
+      if (e.elapsed_str) line += '<span style="color:#888">(' + e.elapsed_str + ')</span> ';
+      if (e.error || (e.type === 'error')) {
+        line += '<span style="color:#ff6b6b">' + escapeHtml(String(e.error || e.content || '').substring(0,150)) + '</span>';
+      } else if (e.content) {
+        line += '<span style="color:#ddd">' + escapeHtml(String(e.content).substring(0,120)) + '</span>';
+      } else if (e.result_preview) {
+        line += '<span style="color:#aaa">' + escapeHtml(String(e.result_preview).substring(0,120)) + '</span>';
+      }
+      return '<div style="margin:2px 0;font-size:11px;line-height:1.4">' + line + '</div>';
+    }).join('');
+    el.innerHTML = html;
+    document.getElementById('entryCount').textContent = d.entries.length + ' 条';
+  }).catch(function(e) {
+    document.getElementById('logView').textContent = '加载失败: ' + e;
+    document.getElementById('entryCount').textContent = '';
+  });
+}
+
+function toggleAutoRefresh() {
+  if (document.getElementById('autoRefresh').checked) {
+    startRefresh();
+  } else {
+    stopRefresh();
+  }
+}
+
+function startRefresh() {
+  stopRefresh();
+  refreshTimer = setInterval(function() {
+    if (currentFile) loadLog(currentFile);
+  }, 30000);
+}
+
+function stopRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+}
+
+function escapeHtml(text) {
+  return String(text || '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[s]));
+}
+
+{% if selected_file %}
+loadLog(currentFile);
+{% endif %}
+</script>
+{% endblock %}

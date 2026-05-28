@@ -1,9 +1,10 @@
 {% extends "base.html" %}
+{% block title %}运维仪表盘 — DeepRead Studio{% endblock %}
 {% block content %}
 
 <div class="hero">
   <h1>DeepRead Studio</h1>
-  <p class="hero-sub">本地深度阅读控制台 · 飞书负责输入，Obsidian 负责沉淀，这里看清中间发生了什么</p>
+  <p class="hero-sub">运维控制台 · 飞书+Obsidian+Agent 运作状态一览</p>
   <div class="user-switch">
     <span>用户</span>
     <select id="dashboardUser" onchange="changeDashboardUser()">
@@ -16,80 +17,79 @@
 </div>
 
 <div class="modules">
-  <a href="/sessions{% if selected_user and selected_user != 'all' %}?user={{ selected_user | urlencode }}{% endif %}" class="module-card">
-    <span class="module-icon">会话</span>
-    <h3>会话回放</h3>
-    <p>{{ agent_count }} Agent · {{ claude_count }} Claude Code</p>
-    <small>查看对话、工具调用、错误定位</small>
-  </a>
-  <a href="/notes{% if selected_user and selected_user != 'all' %}?user={{ selected_user | urlencode }}{% endif %}" class="module-card">
-    <span class="module-icon">笔记</span>
-    <h3>笔记审阅</h3>
-    <p>预览 Obsidian 笔记、compile、质量检查</p>
-    <small>管理 {{ knowledge.book_notes or 0 }} 篇本书笔记</small>
-  </a>
   <a href="/doctor" class="module-card">
     <span class="module-icon">健康</span>
     <h3>健康检查</h3>
-    <p>配置 · 依赖 · 路径 · LLM · 飞书 · 笔记质量</p>
-    <small>28 项检查 · 一键诊断</small>
+    <small>配置 · 依赖 · 路径 · LLM · 飞书 · 笔记质量</small>
   </a>
-  <a href="/compare" class="module-card">
-    <span class="module-icon">对比</span>
-    <h3>对比实验</h3>
-    <p>Claude Code vs 飞书 Agent 笔记质量对比</p>
-    <small>引用数 · 字数 · 内链 · frontmatter · diff</small>
+  <a href="/users" class="module-card">
+    <span class="module-icon">用户</span>
+    <h3>用户管理</h3>
+    <small>状态 · 会话 · 笔记 · 导出 · 重置</small>
+  </a>
+  <a href="/books" class="module-card">
+    <span class="module-icon">书库</span>
+    <h3>书库</h3>
+    <small>上传 · 检查 · 目录预览 · 章节校验</small>
+  </a>
+  <a href="/backup" class="module-card">
+    <span class="module-icon">备份</span>
+    <h3>备份</h3>
+    <small>一键打包 · 下载 · 历史管理</small>
   </a>
 </div>
 
-<div class="panels">
-  <div class="panel">
-    <h2>当前阅读</h2>
-    {% if reading.book != '—' %}
-    <div class="reading-task">
-      <div class="rt-book">《{{ reading.book }}》</div>
-      {% if reading.chapter %}<div class="rt-chapter">第{{ reading.chapter }}章{% if reading.section %} · 最近小节: {{ reading.section }}{% endif %}</div>{% endif %}
-      <div class="rt-status">
-        <span class="badge stage-{{ reading.stage }}">{{ reading.stage_cn }}</span>
-        {% if reading.goal %}<span class="rt-goal">目标: {{ reading.goal }}</span>{% endif %}
-      </div>
-      <div class="rt-next">{{ reading.next }}</div>
+<div class="ops-grid">
+  <section class="ops-card">
+    <h2>服务器状态 <span class="status-refresh" onclick="refreshStatus()">刷新</span></h2>
+    <div class="kv">
+      <div><span>CPU</span> <strong>{{ server_status.cpu }}</strong></div>
+      <div><span>内存</span> <strong>{{ server_status.mem }}</strong></div>
+      <div><span>磁盘</span> <strong>{{ server_status.disk }}</strong></div>
+      <div><span>Python</span> <strong>{{ server_status.python }}</strong></div>
+      <div><span>运行时间</span> <strong>自 {{ server_status.boot }}</strong></div>
+      <div><span>Web 登录</span> <strong class="{{ 'summary-pass' if auth_enabled else 'summary-fail' }}">{{ '已启用' if auth_enabled else '未启用' }}</strong></div>
+      <div><span>飞书 Bot</span> <strong id="bot-status">检查中...</strong></div>
+      <div><span>会话</span> <strong>{{ agent_count }} Agent · {{ claude_count }} Claude Code</strong></div>
+    </div>
+    {% if recent_errors %}
+    <div class="mini-output" style="margin-top:12px; height:auto; max-height:160px">
+      <strong style="color:#ff6b6b">最近错误 ({{ recent_errors|length }})</strong>
+      {% for e in recent_errors %}
+      <div style="margin-top:4px;font-size:11px;color:#ccc">{{ e.ts[:16] }} {{ e.msg[:120] }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="ops-card">
+    <h2>阅读任务一览</h2>
+    {% if tasks %}
+    <div class="task-table-wrap">
+    <table class="data-table">
+      <thead><tr><th>用户</th><th>书名</th><th>章节</th><th>模式</th><th>地图</th><th>更新</th></tr></thead>
+      <tbody>
+      {% for t in tasks %}
+      <tr>
+        <td>{{ t.user_label }}</td>
+        <td>{{ t.book }}</td>
+        <td>{{ t.chapter }}</td>
+        <td><span class="tag">{{ t.mode_name or t.reading_mode or '—' }}</span></td>
+        <td>A{{ t.A_core }}/B{{ t.B_important }}/C{{ t.C_evidence }}/D{{ t.D_application }}</td>
+        <td style="font-size:11px;color:#888">{{ t.updated[:16] if t.updated else '—' }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
     </div>
     {% else %}
-    <p class="empty">尚未开始阅读。在飞书或终端输入 "精读《书名》第N章"</p>
+    <p class="empty" style="padding:12px">暂无活跃阅读任务</p>
     {% endif %}
-  </div>
-
-  <div class="panel">
-    <h2>知识积累</h2>
-    <div class="knowledge">
-      <div class="k-stat"><span class="k-num">{{ knowledge.concepts }}</span> 概念</div>
-      <div class="k-stat"><span class="k-num">{{ knowledge.book_notes or 0 }}</span> 本书笔记</div>
-      <div class="k-recent">
-        <small>最近新增</small>
-        {% for c in knowledge.recent_5 %}
-        <span class="tag">{{ c }}</span>
-        {% endfor %}
-      </div>
-    </div>
-  </div>
+    <div style="margin-top:8px"><a href="/tasks" style="font-size:12px;color:var(--c-primary)">查看全部 →</a></div>
+  </section>
 </div>
 
-<div class="panels">
-  <div class="panel">
-    <h2>系统状态 <span style="font-weight:400;font-size:12px;color:#aaa;cursor:pointer" onclick="refreshStatus()">刷新</span></h2>
-    <div class="sys-grid">
-      <div><span class="sys-label">模型</span> {{ system.model }}</div>
-      <div><span class="sys-label">后端</span> {{ system.provider }}</div>
-      <div><span class="sys-label">飞书 Bot</span> <span id="bot-status">检查中...</span></div>
-      <div><span class="sys-label">笔记</span> {{ knowledge.book_notes or 0 }} 篇</div>
-      <div><span class="sys-label">Doctor</span> <span id="doctor-summary">—</span></div>
-      <div><span class="sys-label">质量</span> <span id="quality-summary">—</span></div>
-    </div>
-  </div>
-</div>
-
-<h2>最近活动</h2>
+<h2 style="margin-top:24px">最近会话</h2>
 <div class="activity-list">
 {% for s in recent %}
   <a href="/sessions/{{ s.id }}" class="activity-item {{ 'has-notes' if s.has_notes }} {{ 'has-errors' if s.has_errors }}">
@@ -99,7 +99,7 @@
       {% if s.has_notes %}<span class="badge info">有笔记</span>{% endif %}
       {% if s.has_errors %}<span class="badge warn">有错误</span>{% endif %}
     </span>
-    <span class="act-meta">用户{{ s.user_count }} · AI{{ s.ai_count }} · 工具{{ s.tool_count }} · {{ s.updated[:16] }}</span>
+    <span class="act-meta">{{ s.user_label }} · 用户{{ s.user_count }} · AI{{ s.ai_count }} · 工具{{ s.tool_count }} · {{ s.updated[:16] }}</span>
   </a>
 {% endfor %}
 {% if not recent %}
@@ -108,108 +108,29 @@
 </div>
 
 <style>
-.hero { margin-bottom: 24px; }
-.hero h1 { font-size: 24px; margin-bottom: 4px; }
-.hero-sub { color: #888; font-size: 14px; }
-.user-switch { margin-top: 10px; display: flex; align-items: center; gap: 8px; color: #888; font-size: 13px; }
-.user-switch select { padding: 5px 10px; border: 1px solid #ddd; border-radius: 6px; background: #fff; }
-
-.modules { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
-.module-card { background: #fff; border-radius: 8px; padding: 16px; text-decoration: none; color: #222; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: box-shadow .15s; }
-.module-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
-.module-card h3 { font-size: 15px; margin-bottom: 4px; }
-.module-card p { font-size: 13px; color: #555; margin-bottom: 2px; }
-.module-card small { font-size: 11px; color: #aaa; }
-.module-icon { display: inline-block; background: #e8ecf4; border-radius: 6px; padding: 2px 10px; font-size: 12px; color: #4a6fa5; margin-bottom: 8px; }
-
-.panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
-.panel { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-.panel h2 { font-size: 14px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
-
-.reading-task { }
-.rt-book { font-size: 18px; font-weight: 700; margin-bottom: 2px; }
-.rt-chapter { font-size: 14px; color: #555; margin-bottom: 6px; }
-.rt-status { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.rt-goal { font-size: 13px; color: #888; }
-.rt-next { font-size: 13px; color: #4a6fa5; background: #f0f4ff; padding: 6px 12px; border-radius: 6px; }
-
-.badge { padding: 1px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-.stage-idle { background: #e8e8f0; color: #666; }
-.stage-init { background: #e3f2fd; color: #1565c0; }
-.stage-feynman { background: #fce4ec; color: #c62828; }
-.stage-socratic { background: #fff3e0; color: #e65100; }
-.stage-associate { background: #e8f5e9; color: #2e7d32; }
-.stage-wrapup { background: #f3e5f5; color: #6a1b9a; }
-.badge.ok { background: #e8f5e9; color: #2e7d32; margin-left: 4px; }
-.badge.info { background: #e3f2fd; color: #1565c0; margin-left: 4px; }
-.badge.warn { background: #fff3e0; color: #e65100; margin-left: 4px; }
-
-.knowledge { }
-.k-stat { font-size: 14px; margin-bottom: 4px; }
-.k-num { font-size: 22px; font-weight: 700; color: #4a6fa5; margin-right: 4px; }
-.k-recent { margin-top: 8px; }
-.k-recent small { color: #aaa; display: block; margin-bottom: 4px; }
-.tag { display: inline-block; background: #f0f0f5; border-radius: 4px; padding: 2px 8px; font-size: 12px; margin: 2px 4px 2px 0; }
-
-.sys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 14px; }
-.sys-label { color: #aaa; font-size: 12px; margin-right: 4px; }
-
-.activity-list { display: flex; flex-direction: column; gap: 4px; }
-.activity-item { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: #fff; border-radius: 6px; text-decoration: none; color: #222; font-size: 13px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-.activity-item:hover { background: #f8f8ff; }
-.activity-item.has-notes { border-left: 3px solid #4caf50; }
-.activity-item.has-errors { border-left: 3px solid #ff9800; }
-.act-title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.act-badges { flex-shrink: 0; }
-.act-meta { color: #aaa; font-size: 11px; flex-shrink: 0; }
-
-.empty { color: #aaa; font-size: 14px; padding: 12px 0; }
-
-@media (max-width: 768px) {
-  .modules { grid-template-columns: repeat(2, 1fr); }
-  .panels { grid-template-columns: 1fr; }
-}
+.task-table-wrap { overflow-x: auto; }
+.status-refresh { font-weight:400; font-size:12px; color:#aaa; cursor:pointer }
 </style>
 
 <script>
 function refreshStatus() {
-  // Bot 状态
   fetch('/api/bot/status').then(r => r.json()).then(d => {
     var el = document.getElementById('bot-status');
     if (d.stale) {
-      el.innerHTML = '<span class="badge warn">锁文件异常</span>';
+      el.innerHTML = '<span style="color:var(--c-warn)">锁文件异常</span>';
     } else if (d.running) {
-      el.innerHTML = '<span class="badge ok">运行中</span>';
+      el.innerHTML = '<span style="color:var(--c-success)">运行中 (PID ' + d.pid + ')</span>';
     } else {
-      el.innerHTML = '<span class="badge stage-idle">未运行</span>';
+      el.innerHTML = '<span style="color:#888">已停止</span>';
     }
   }).catch(() => {
-    document.getElementById('bot-status').innerHTML = '<span class="badge stage-idle">检查失败</span>';
-  });
-
-  // Doctor 快速检查
-  fetch('/api/doctor').then(r => r.json()).then(d => {
-    var c = d.counts || {};
-    var matchP = c.pass || 0;
-    var matchW = c.warn || 0;
-    var matchF = c.fail || 0;
-    var el = document.getElementById('doctor-summary');
-    var parts = [];
-    if (matchP) parts.push(matchP + ' PASS');
-    if (matchW) parts.push('<span style="color:#e65100">' + matchW + ' WARN</span>');
-    if (matchF) parts.push('<span style="color:#c62828">' + matchF + ' FAIL</span>');
-    el.innerHTML = parts.join(' ') || '—';
-  }).catch(() => {
-    document.getElementById('doctor-summary').textContent = '—';
+    document.getElementById('bot-status').textContent = '—';
   });
 }
-
-// 页面加载时自动刷新
-refreshStatus();
-
 function changeDashboardUser() {
   const user = document.getElementById('dashboardUser').value;
   window.location = user && user !== 'all' ? '/?user=' + encodeURIComponent(user) : '/?user=all';
 }
+refreshStatus();
 </script>
 {% endblock %}

@@ -7,6 +7,11 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+{% if security_level == 'danger' %}
+<div class="security-banner danger">{{ security_message }}</div>
+{% elif security_level == 'warn' %}
+<div class="security-banner warn">{{ security_message }}</div>
+{% endif %}
 <nav>
   <a href="/" class="logo">DeepRead Studio</a>
   <button class="nav-toggle" onclick="this.parentElement.classList.toggle('open')">&#9776;</button>
@@ -15,6 +20,8 @@
     <a href="/notes">笔记</a>
     <a href="/users">用户</a>
     <a href="/books">书籍</a>
+    <a href="/tasks">任务</a>
+    <a href="/logs">日志</a>
     <a href="/compare">对比</a>
     <a href="/doctor">健康</a>
     <a href="/setup">配置</a>

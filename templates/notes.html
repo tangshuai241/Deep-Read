@@ -12,6 +12,7 @@
     {% endfor %}
   </select>
   <button onclick="changeDir()">浏览</button>
+  <button onclick="downloadNotes()" style="margin-left:auto">下载 ZIP</button>
 </div>
 
 <div class="list">
@@ -37,6 +38,14 @@ function changeDir() {
   if (dir) params.set('dir', dir);
   if (user) params.set('user', user);
   window.location = '/notes?' + params.toString();
+}
+function downloadNotes() {
+  const dir = document.getElementById('dirInput').value;
+  const user = document.getElementById('userInput').value;
+  const params = new URLSearchParams();
+  if (dir) params.set('dir', dir);
+  if (user) params.set('user', user);
+  window.location = '/api/notes/download?' + params.toString();
 }
 </script>
 {% endblock %}

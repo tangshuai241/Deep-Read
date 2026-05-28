@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """DeepRead Studio — Web 控制台 (FastAPI)"""
 import hashlib, hmac, json, os, re, secrets, shutil, sys, urllib.parse, zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from difflib import unified_diff
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 BASE = Path(__file__).parent
 SCRIPTS = BASE / "scripts"
@@ -28,6 +33,10 @@ jinja_env = Environment(loader=FileSystemLoader(str(BASE / "templates")), auto_r
 
 def render(name, ctx):
     """直接渲染 Jinja2 模板，绕过 Starlette 的 TemplateResponse"""
+    sl = security_level()
+    ctx.setdefault("security_level", sl[0])
+    ctx.setdefault("security_message", sl[1])
+    ctx.setdefault("auth_enabled", web_auth_enabled())
     tmpl = jinja_env.get_template(name)
     return HTMLResponse(tmpl.render(**ctx))
 
@@ -251,6 +260,155 @@ def note_owner_from_path(path, base_dir):
     if len(parts) >= 3 and parts[0] == "users":
         return parts[1]
     return ""
+
+def security_level():
+    """返回 (level, message)
+    level: 'danger' | 'warn' | 'ok'
+    """
+    if web_auth_enabled():
+        return ("ok", "")
+    is_local = os.environ.get("DEEPREAD_HOST", "127.0.0.1") in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+    if is_local:
+        return ("warn", "建议设置 DEEPREAD_WEB_PASSWORD 启用 Web 登录保护")
+    return ("danger", "控制台暴露在公网且无密码保护！请立即设置 DEEPREAD_WEB_PASSWORD 环境变量")
+
+def server_status():
+    info = {"python": sys.version.split()[0]}
+    if psutil:
+        info["cpu"] = f"{psutil.cpu_percent(interval=0.1):.0f}%"
+        mem = psutil.virtual_memory()
+        info["mem"] = f"{mem.percent:.0f}% ({mem.available // 1048576} MB 可用)"
+        disk = psutil.disk_usage(str(BASE))
+        info["disk"] = f"{disk.percent:.0f}% ({disk.free // 1073741824} GB 空闲)"
+        info["boot"] = datetime.fromtimestamp(psutil.boot_time()).strftime("%m-%d %H:%M")
+    else:
+        for k in ("cpu", "mem", "disk", "boot"):
+            info[k] = "—"
+    return info
+
+def recent_errors(limit=5):
+    errors = []
+    if not LOGS_DIR.exists():
+        return errors
+    files = sorted(LOGS_DIR.glob("*.log"), key=os.path.getmtime, reverse=True)
+    for fp in files:
+        if len(errors) >= limit:
+            break
+        try:
+            for line in open(fp, encoding="utf-8", errors="replace"):
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg = str(entry.get("error", "") or entry.get("content", "") or "")
+                if not msg or all(kw not in msg.lower() for kw in ("error", "fail", "exception", "traceback")):
+                    continue
+                errors.append({
+                    "ts": entry.get("ts", ""),
+                    "type": entry.get("type", ""),
+                    "msg": msg[:200],
+                    "file": fp.name,
+                    "user_id": entry.get("user_id", ""),
+                })
+                if len(errors) >= limit:
+                    break
+        except Exception:
+            pass
+    return errors
+
+def aggregate_tasks():
+    tasks = []
+    for user in [u["id"] for u in known_users()]:
+        cp = _user_state_dir(user) / "learning_contract.json"
+        if not cp.exists():
+            continue
+        try:
+            with open(cp, encoding="utf-8") as f:
+                c = json.load(f)
+        except Exception:
+            continue
+        scope = c.get("scope", {})
+        km = c.get("knowledge_map", {})
+        mode = c.get("reading_mode", "")
+        mode_cn = ""
+        if mode:
+            try:
+                from reading_modes import READING_MODES
+                mode_cn = READING_MODES.get(mode, {}).get("name", mode)
+            except ImportError:
+                mode_cn = mode
+        tasks.append({
+            "user_id": user,
+            "user_label": user_label(user),
+            "book": scope.get("book", ""),
+            "chapter": str(scope.get("chapter", "")),
+            "section": str(scope.get("section", "")),
+            "goal": scope.get("goal", ""),
+            "reading_mode": mode,
+            "mode_name": mode_cn,
+            "book_type": c.get("book_type", ""),
+            "profile": c.get("profile", ""),
+            "A_core": len(km.get("A_core", [])),
+            "B_important": len(km.get("B_important", [])),
+            "C_evidence": len(km.get("C_evidence", [])),
+            "D_application": len(km.get("D_application", [])),
+            "updated": c.get("updated_at", ""),
+        })
+    return sorted(tasks, key=lambda t: t.get("updated", ""), reverse=True)
+
+def list_log_files():
+    if not LOGS_DIR.exists():
+        return []
+    files = []
+    for fp in sorted(LOGS_DIR.glob("*.log"), key=os.path.getmtime, reverse=True):
+        fsize = fp.stat().st_size
+        mtime = datetime.fromtimestamp(fp.stat().st_mtime).isoformat(timespec="seconds")
+        files.append({"name": fp.name, "size": fsize, "size_str": f"{fsize/1024:.0f}KB" if fsize < 1048576 else f"{fsize/1048576:.1f}MB", "mtime": mtime})
+    return files
+
+def read_log_file(filename, filter_user="", filter_error=False, limit=200):
+    fp = LOGS_DIR / filename
+    if not fp.exists() or not _allowed_path(str(fp)):
+        return []
+    lines = []
+    try:
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if len(lines) >= limit:
+                    break
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if filter_user and entry.get("user_id", "") != filter_user:
+                    continue
+                if filter_error:
+                    msg = str(entry.get("error", "") or entry.get("content", "") or "")
+                    if not msg or all(kw not in msg.lower() for kw in ("error", "fail", "exception")):
+                        continue
+                entry["elapsed_str"] = f"{entry.get('elapsed_ms',0)/1000:.1f}s" if entry.get("elapsed_ms") else ""
+                lines.append(entry)
+    except Exception:
+        pass
+    return list(reversed(lines))[-limit:]
+
+def compress_notes(dir_path, user=""):
+    config = load_config()
+    base_dir = dir_path or get_notes_dir()
+    notes = list_notes(base_dir, user=user)
+    if not notes:
+        return None
+    tmp = BASE / "exports"
+    tmp.mkdir(exist_ok=True)
+    label = sanitize_user_id(user) if user else "all"
+    zip_path = tmp / f"deepread-notes-{label}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for n in notes:
+            fp = n["path"]
+            if os.path.exists(fp):
+                arcname = os.path.relpath(fp, base_dir)
+                zf.write(fp, arcname)
+    return zip_path
 
 def list_notes(base_dir, user=""):
     notes = []
@@ -665,7 +823,9 @@ def dashboard(request: Request, user: str = ""):
         "recent": recent, "system": system,
         "agent_count": len(all_sessions), "claude_count": claude_count,
         "users": users, "selected_user": selected_user,
-        "auth_enabled": web_auth_enabled(),
+        "server_status": server_status(),
+        "tasks": aggregate_tasks()[:10],
+        "recent_errors": recent_errors(),
     })
 
 @app.get("/sessions", response_class=HTMLResponse)
@@ -798,6 +958,64 @@ def backup_page(request: Request):
         "request": request,
         "backups": backup_script.list_backups(),
     })
+
+
+@app.get("/tasks", response_class=HTMLResponse)
+def tasks_page(request: Request):
+    return render("tasks.html", {
+        "request": request, "tasks": aggregate_tasks(),
+    })
+
+
+@app.get("/logs", response_class=HTMLResponse)
+def logs_page(request: Request, file: str = ""):
+    return render("logs.html", {
+        "request": request,
+        "log_files": list_log_files(),
+        "selected_file": file,
+        "users": known_users(),
+    })
+
+
+@app.get("/api/tasks")
+def api_tasks():
+    return {"ok": True, "tasks": aggregate_tasks()}
+
+
+@app.get("/api/logs")
+def api_logs():
+    return {"ok": True, "files": list_log_files()}
+
+
+@app.get("/api/logs/view")
+def api_logs_view(file: str = Query(""), user: str = Query(""), error: str = Query(""), limit: int = Query(200)):
+    if not file:
+        return JSONResponse({"ok": False, "error": "缺少 file 参数"}, 400)
+    return {"ok": True, "entries": read_log_file(file, filter_user=user, filter_error=error == "1", limit=min(limit, 500))}
+
+
+@app.post("/api/books/upload")
+async def api_books_upload(file: UploadFile):
+    if not file.filename or not file.filename.lower().endswith(".epub"):
+        return JSONResponse({"ok": False, "error": "仅支持 .epub 文件"}, 400)
+    books_dir = _expand_path(get_books_dir(), BASE / "books")
+    books_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9_\-\.\u4e00-\u9fff]+", "_", file.filename)
+    dest = books_dir / safe_name
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:
+        return JSONResponse({"ok": False, "error": "文件不能超过 50MB"}, 400)
+    dest.write_bytes(content)
+    result = inspect_book(str(dest.resolve()))
+    return {"ok": result.get("ok", False), "filename": safe_name, "inspect": result}
+
+
+@app.get("/api/notes/download")
+def api_notes_download(dir: str = Query(""), user: str = Query("")):
+    zp = compress_notes(dir, user=user)
+    if not zp:
+        return JSONResponse({"ok": False, "error": "没有可下载的笔记"}, 404)
+    return FileResponse(str(zp), filename=zp.name, media_type="application/zip")
 
 
 @app.get("/api/profile")
