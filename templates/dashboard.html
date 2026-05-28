@@ -107,11 +107,6 @@
 {% endif %}
 </div>
 
-<style>
-.task-table-wrap { overflow-x: auto; }
-.status-refresh { font-weight:400; font-size:12px; color:#aaa; cursor:pointer }
-</style>
-
 <script>
 function refreshStatus() {
   fetch('/api/bot/status').then(r => r.json()).then(d => {
