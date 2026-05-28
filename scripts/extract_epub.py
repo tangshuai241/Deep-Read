@@ -485,6 +485,101 @@ def list_chapters(book, ncx):
     return len(chapters)
 
 
+def build_toc(book, ncx, preview_chapters=12):
+    """Return a structured TOC for Web/CLI diagnostics."""
+    items = []
+    seen_nums = {}
+    gaps = []
+    prev_num = None
+    reset_count = 0
+
+    for pos, entry in enumerate(ncx, 1):
+        text = get_content_for_file(book, entry["file"]) if entry.get("is_chapter") else None
+        word_count = len(text) if text else 0
+        chapter_num = entry.get("chapter_num")
+        if entry.get("is_chapter") and chapter_num is not None:
+            seen_nums.setdefault(chapter_num, 0)
+            seen_nums[chapter_num] += 1
+            if prev_num is not None and chapter_num > prev_num + 1:
+                gaps.extend(range(prev_num + 1, chapter_num))
+            elif prev_num is not None and chapter_num < prev_num:
+                reset_count += 1
+            prev_num = chapter_num
+        items.append({
+            "pos": pos,
+            "index": chapter_num,
+            "title": entry.get("title", ""),
+            "file": entry.get("file", ""),
+            "is_chapter": bool(entry.get("is_chapter")),
+            "is_part": bool(entry.get("is_part")),
+            "word_count": word_count,
+        })
+
+    chapters = [item for item in items if item["is_chapter"]]
+    duplicates = sorted(num for num, count in seen_nums.items() if count > 1)
+    frontmatter = [item for item in items if not item["is_chapter"]][:10]
+    empty_chapters = [item for item in chapters if item["word_count"] <= 0]
+    short_chapters = [item for item in chapters if 0 < item["word_count"] < 300]
+
+    warnings = []
+    if not chapters:
+        warnings.append("未识别到正文章节")
+    if frontmatter:
+        warnings.append(f"目录前含 {len(frontmatter)} 个非章节项，已避免占用章节编号")
+    if gaps:
+        warnings.append(f"章节编号存在缺口: {', '.join(str(x) for x in gaps[:12])}")
+    if duplicates and reset_count:
+        warnings.append(f"检测到 {reset_count} 次章节编号重置，可能是分卷/分册目录；请按目录预览确认目标章节")
+    elif duplicates:
+        warnings.append(f"章节编号重复: {', '.join(str(x) for x in duplicates[:12])}")
+    if empty_chapters:
+        warnings.append(f"{len(empty_chapters)} 个章节无法提取正文")
+    if short_chapters:
+        warnings.append(f"{len(short_chapters)} 个章节正文偏短，建议抽查 EPUB 质量")
+
+    return {
+        "items": items,
+        "chapters": chapters,
+        "preview": chapters[:preview_chapters],
+        "frontmatter": frontmatter,
+        "stats": {
+            "total_items": len(items),
+            "chapter_count": len(chapters),
+            "frontmatter_count": len([item for item in items if not item["is_chapter"]]),
+            "empty_chapter_count": len(empty_chapters),
+            "short_chapter_count": len(short_chapters),
+            "duplicate_chapters": duplicates,
+            "missing_chapters": gaps,
+            "chapter_number_resets": reset_count,
+        },
+        "warnings": warnings,
+    }
+
+
+def inspect_book(book_arg, preview_chapters=12):
+    books_dir = load_config()
+    book_path = resolve_book_path(book_arg, books_dir)
+    if not book_path:
+        error(BOOK_NOT_FOUND, f"找不到书籍: {book_arg}",
+              hint=f"搜索目录: {books_dir}，请确认文件名正确且文件存在")
+
+    book, read_mode = load_epub(book_path)
+    ncx = parse_ncx(book)
+    if not ncx:
+        error(EPUB_PARSE_FAILED, "无法从 EPUB 中识别目录或正文章节",
+              hint="可尝试换一个 EPUB 版本，或将章节原文粘贴给 Bot")
+
+    meta = get_book_meta(book, ncx)
+    toc = build_toc(book, ncx, preview_chapters=preview_chapters)
+    return {
+        "ok": True,
+        "book": meta,
+        "path": str(book_path),
+        "read_mode": read_mode,
+        "toc": toc,
+    }
+
+
 def find_chapter(ncx, chapter_ref):
     target = chinese_num_to_int(str(chapter_ref))
     if target is not None:
@@ -602,6 +697,8 @@ def main():
     parser.add_argument("--book", required=True, help="EPUB 文件名或路径")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--meta", action="store_true")
+    parser.add_argument("--inspect", action="store_true", help="输出目录预览与章节校验")
+    parser.add_argument("--preview", type=int, default=12, help="inspect 预览章节数")
     parser.add_argument("--chapter")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -617,6 +714,33 @@ def main():
     if not ncx:
         error(EPUB_PARSE_FAILED, "无法从 EPUB 中识别目录或正文章节",
               hint="可尝试换一个 EPUB 版本，或将章节原文粘贴给 Bot")
+
+    if args.inspect:
+        output = {
+            "ok": True,
+            "book": get_book_meta(book, ncx),
+            "path": str(book_path),
+            "read_mode": read_mode,
+            "toc": build_toc(book, ncx, preview_chapters=args.preview),
+        }
+        if args.json:
+            print(json.dumps(output, ensure_ascii=False, indent=2))
+        else:
+            meta = output["book"]
+            stats = output["toc"]["stats"]
+            print(f"书名: {meta['title']}")
+            print(f"作者: {meta['author']}")
+            print(f"路径: {book_path}")
+            print(f"读取模式: {read_mode}")
+            print(f"目录项: {stats['total_items']} | 章节: {stats['chapter_count']} | 非章节: {stats['frontmatter_count']}")
+            if output["toc"]["warnings"]:
+                print("警告:")
+                for warning in output["toc"]["warnings"]:
+                    print(f"  - {warning}")
+            print("\n章节预览:")
+            for item in output["toc"]["preview"]:
+                print(f"  {item['index']:>3}  {item['title']}  ({item['word_count']}字)")
+        return
 
     if args.meta:
         meta = get_book_meta(book, ncx)

@@ -108,10 +108,19 @@ python cli.py doctor                  # 健康检查（28项）
 python cli.py doctor --deep           # 深度检查（LLM/飞书连通性）
 python cli.py quality "path/note.md"  # 笔记质量检查
 python cli.py concepts scan           # 概念卡盘点
+python cli.py backup                  # 备份 config/state/notes/logs
 python cli.py bot status              # 飞书 Bot 状态
 python cli.py bot start --reply       # 启动飞书 Bot
 python cli.py bot stop                # 停止飞书 Bot
 ```
+
+服务器公开 Web 控制台前，建议设置访问密码：
+
+```bash
+export DEEPREAD_WEB_PASSWORD='换成你的强密码'
+```
+
+也可以在 `config.yaml` 写入 `web.password`。未设置密码时，本地开发仍保持免登录。
 
 飞书 Bot 默认会在最终笔记完成后，把生成的 `.md` 文件作为附件发回当前聊天。服务器部署时如需关闭：
 

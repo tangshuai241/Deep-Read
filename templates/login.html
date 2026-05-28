@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 — DeepRead Studio</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+<main class="login-wrap">
+  <section class="login-panel">
+    <div class="login-mark">DeepRead</div>
+    <h1>Web 控制台登录</h1>
+    <p>这里能查看用户、导出笔记、重置状态和创建备份。服务器公开访问时建议始终开启密码。</p>
+    {% if error %}
+    <div class="login-error">密码不正确</div>
+    {% endif %}
+    <form method="post" action="/login" class="login-form">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label for="password">访问密码</label>
+      <input id="password" name="password" type="password" autofocus autocomplete="current-password">
+      <button type="submit">进入控制台</button>
+    </form>
+  </section>
+</main>
+</body>
+</html>

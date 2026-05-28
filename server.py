@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """DeepRead Studio — Web 控制台 (FastAPI)"""
-import json, os, re, sys
+import hashlib, hmac, json, os, re, secrets, shutil, sys, urllib.parse, zipfile
 from datetime import datetime
 from pathlib import Path
 from difflib import unified_diff
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
 
@@ -14,7 +14,12 @@ BASE = Path(__file__).parent
 SCRIPTS = BASE / "scripts"
 SESSIONS_DIR = BASE / "state" / "sessions"
 LOGS_DIR = BASE / "logs"
+BACKUPS_DIR = BASE / "backups"
 sys.path.insert(0, str(BASE))
+sys.path.insert(0, str(SCRIPTS))
+
+import backup as backup_script
+import extract_epub
 
 app = FastAPI(title="DeepRead Studio")
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
@@ -28,12 +33,76 @@ def render(name, ctx):
 
 
 # ── helpers ────────────────────────────────────────
+def _expand_path(path_value, default=None):
+    if not path_value:
+        return Path(default).resolve() if default else None
+    path = Path(os.path.expanduser(str(path_value)))
+    if not path.is_absolute():
+        path = BASE / path
+    return path.resolve()
+
+
 def load_config():
     try:
         with open(BASE / "config.yaml", encoding="utf-8") as f:
             import yaml; return yaml.safe_load(f) or {}
     except (FileNotFoundError, PermissionError):
         return {}
+
+
+def web_password():
+    config = load_config()
+    return (
+        os.environ.get("DEEPREAD_WEB_PASSWORD")
+        or config.get("web", {}).get("password", "")
+        or config.get("server", {}).get("password", "")
+    )
+
+
+def web_auth_enabled():
+    return bool(web_password())
+
+
+def sign_token(value):
+    secret = web_password()
+    return hmac.new(secret.encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def make_auth_token():
+    nonce = secrets.token_urlsafe(18)
+    return f"{nonce}.{sign_token(nonce)}"
+
+
+def verify_auth_token(token):
+    if not web_auth_enabled():
+        return True
+    if not token or "." not in token:
+        return False
+    nonce, sig = token.split(".", 1)
+    return hmac.compare_digest(sig, sign_token(nonce))
+
+
+def is_authenticated(request: Request):
+    return verify_auth_token(request.cookies.get("deepread_auth", ""))
+
+
+@app.middleware("http")
+async def require_web_auth(request: Request, call_next):
+    if not web_auth_enabled():
+        return await call_next(request)
+
+    path = request.url.path
+    allowed = (
+        path == "/login"
+        or path.startswith("/static/")
+        or path == "/favicon.ico"
+    )
+    if allowed or is_authenticated(request):
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    return RedirectResponse(url=f"/login?next={request.url.path}", status_code=303)
 
 def should_isolate_user_notes(config):
     notes_cfg = config.get("note", {})
@@ -95,7 +164,7 @@ def known_users():
                 users[user_id] = user_label(user_id)
             except Exception:
                 pass
-    state_root = BASE / "state"
+    state_root = _expand_path(load_config().get("paths", {}).get("state_dir"), BASE / "state")
     if state_root.exists():
         for child in state_root.iterdir():
             if child.is_dir() and child.name != "sessions":
@@ -110,22 +179,49 @@ def _allowed_path(path: str) -> bool:
         return False
     resolved = os.path.realpath(path)
     config = load_config()
-    allowed_roots = [str(BASE)]
+    allowed_roots = [os.path.realpath(str(BASE))]
     for key in ("notes_dir", "vault_dir", "books_dir"):
         p = config.get("paths", {}).get(key, "")
         if p:
-            allowed_roots.append(os.path.realpath(p))
-    return any(resolved.startswith(root) for root in allowed_roots)
+            allowed_roots.append(os.path.realpath(str(_expand_path(p))))
+    return any(resolved == root or resolved.startswith(root + os.sep) for root in allowed_roots)
+
+
+def _allowed_user_path(path: Path) -> bool:
+    try:
+        path = path.resolve()
+    except OSError:
+        return False
+    config = load_config()
+    roots = [
+        BASE.resolve(),
+        _expand_path(config.get("paths", {}).get("state_dir"), BASE / "state"),
+        _expand_path(config.get("paths", {}).get("notes_dir"), BASE / "notes"),
+    ]
+    return any(root and (path == root or root in path.parents) for root in roots)
+
+
+def _user_state_dir(user):
+    config = load_config()
+    state_root = _expand_path(config.get("paths", {}).get("state_dir"), BASE / "state")
+    return state_root / sanitize_user_id(user)
+
+
+def _user_note_dir(user):
+    config = load_config()
+    base_notes = _expand_path(config.get("paths", {}).get("notes_dir"), BASE / "notes")
+    return Path(resolve_user_notes_dir(str(base_notes), user, config))
 
 def load_state():
-    p = BASE / "state" / "default" / "current.json"
+    state_root = _expand_path(load_config().get("paths", {}).get("state_dir"), BASE / "state")
+    p = state_root / "default" / "current.json"
     if p.exists():
         with open(p, encoding="utf-8-sig") as f:
             return json.load(f)
     return {}
 
 def load_user_state(user="default"):
-    state_root = BASE / "state"
+    state_root = _expand_path(load_config().get("paths", {}).get("state_dir"), BASE / "state")
     p = state_root / sanitize_user_id(user) / "current.json"
     if not p.exists() and user != "default":
         p = state_root / str(user) / "current.json"
@@ -137,6 +233,11 @@ def load_user_state(user="default"):
 def get_notes_dir():
     c = load_config()
     return c.get("paths", {}).get("notes_dir", str(BASE / "notes"))
+
+
+def get_books_dir():
+    c = load_config()
+    return c.get("paths", {}).get("books_dir", str(BASE / "books"))
 
 def note_owner_from_path(path, base_dir):
     config = load_config()
@@ -237,6 +338,119 @@ def list_sessions():
             })
         except: pass
     return sess
+
+
+def sessions_for_user(user):
+    user = sanitize_user_id(user)
+    return [s for s in list_sessions() if sanitize_user_id(s.get("user_id", "default")) == user]
+
+
+def user_summary(user):
+    user = sanitize_user_id(user)
+    state = load_user_state(user)
+    current = state.get("current", {})
+    config = load_config()
+    notes_dir = _user_note_dir(user) if should_isolate_user_notes(config) else _expand_path(get_notes_dir(), BASE / "notes")
+    notes = list_notes(str(notes_dir), user=user if should_isolate_user_notes(config) else "")
+    sessions = sessions_for_user(user)
+    contract_path = _user_state_dir(user) / "learning_contract.json"
+    return {
+        "id": user,
+        "label": user_label(user),
+        "state": state,
+        "current": current,
+        "sessions": len(sessions),
+        "notes": len(notes),
+        "last_session": sessions[0] if sessions else None,
+        "notes_dir": str(notes_dir),
+        "state_dir": str(_user_state_dir(user)),
+        "has_contract": contract_path.exists(),
+        "updated": sessions[0]["updated"] if sessions else "",
+    }
+
+
+def export_user_archive(user):
+    user = sanitize_user_id(user)
+    export_dir = BASE / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = export_dir / f"deepread-user-{user}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+
+    state_dir = _user_state_dir(user)
+    note_dir = _user_note_dir(user)
+    sessions = sessions_for_user(user)
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        manifest = {
+            "user": user,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "state_dir": str(state_dir),
+            "notes_dir": str(note_dir),
+            "session_count": len(sessions),
+        }
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        if state_dir.exists():
+            for fp in state_dir.rglob("*"):
+                if fp.is_file():
+                    zf.write(fp, (Path("state") / fp.relative_to(state_dir)).as_posix())
+        if note_dir.exists():
+            for fp in note_dir.rglob("*"):
+                if fp.is_file():
+                    zf.write(fp, (Path("notes") / fp.relative_to(note_dir)).as_posix())
+        for s in sessions:
+            sp = SESSIONS_DIR / f"{s['id']}.json"
+            if sp.exists():
+                zf.write(sp, (Path("sessions") / sp.name).as_posix())
+    return archive_path
+
+
+def reset_user_data(user):
+    user = sanitize_user_id(user)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    reset_root = BASE / "state" / "_reset_archive" / f"{user}-{stamp}"
+    reset_root.mkdir(parents=True, exist_ok=True)
+    moved = []
+
+    state_dir = _user_state_dir(user)
+    note_dir = _user_note_dir(user)
+    for label, path in (("state", state_dir), ("notes", note_dir)):
+        if path.exists() and _allowed_user_path(path):
+            target = reset_root / label
+            shutil.move(str(path), str(target))
+            moved.append({"label": label, "from": str(path), "to": str(target)})
+
+    session_dir = reset_root / "sessions"
+    session_dir.mkdir(exist_ok=True)
+    for s in sessions_for_user(user):
+        sp = SESSIONS_DIR / f"{s['id']}.json"
+        if sp.exists() and _allowed_user_path(sp):
+            shutil.move(str(sp), str(session_dir / sp.name))
+            moved.append({"label": "session", "from": str(sp), "to": str(session_dir / sp.name)})
+
+    return {"ok": True, "user": user, "archive": str(reset_root), "moved": moved}
+
+
+def list_books():
+    books_dir = _expand_path(get_books_dir(), BASE / "books")
+    if not books_dir.exists():
+        return []
+    books = []
+    for fp in sorted(books_dir.rglob("*.epub"), key=lambda p: p.stat().st_mtime, reverse=True):
+        books.append({
+            "name": fp.name,
+            "path": str(fp),
+            "rel": str(fp.relative_to(books_dir)),
+            "size": fp.stat().st_size,
+            "mtime": datetime.fromtimestamp(fp.stat().st_mtime).isoformat(timespec="seconds"),
+        })
+    return books
+
+
+def inspect_book(book_arg, preview=20):
+    try:
+        return extract_epub.inspect_book(book_arg, preview_chapters=preview)
+    except SystemExit as exc:
+        return {"ok": False, "error": f"EPUB 检查失败: {exc}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def list_claude_sessions():
@@ -345,6 +559,43 @@ def compare_notes(left_path, right_path):
 
 
 # ── pages ──────────────────────────────────────────
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str = "/"):
+    if not web_auth_enabled():
+        return RedirectResponse(url="/", status_code=303)
+    if not next.startswith("/") or next.startswith("//"):
+        next = "/"
+    return render("login.html", {
+        "request": request,
+        "next": next or "/",
+        "error": request.query_params.get("error", ""),
+    })
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    if not web_auth_enabled():
+        return RedirectResponse(url="/", status_code=303)
+    body = (await request.body()).decode("utf-8", errors="replace")
+    form = urllib.parse.parse_qs(body)
+    password = form.get("password", [""])[0]
+    next_url = form.get("next", ["/"])[0] or "/"
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/"
+    if hmac.compare_digest(password, web_password()):
+        resp = RedirectResponse(url=next_url, status_code=303)
+        resp.set_cookie("deepread_auth", make_auth_token(), httponly=True, samesite="lax")
+        return resp
+    return RedirectResponse(url=f"/login?error=1&next={urllib.parse.quote(next_url)}", status_code=303)
+
+
+@app.get("/logout")
+def logout():
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie("deepread_auth")
+    return resp
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, user: str = ""):
     users = known_users()
@@ -414,6 +665,7 @@ def dashboard(request: Request, user: str = ""):
         "recent": recent, "system": system,
         "agent_count": len(all_sessions), "claude_count": claude_count,
         "users": users, "selected_user": selected_user,
+        "auth_enabled": web_auth_enabled(),
     })
 
 @app.get("/sessions", response_class=HTMLResponse)
@@ -516,6 +768,38 @@ def concepts_page(request: Request):
     return render("concepts.html", {"request": request})
 
 
+@app.get("/users", response_class=HTMLResponse)
+def users_page(request: Request, user: str = ""):
+    users = [user_summary(u["id"]) for u in known_users()]
+    selected = sanitize_user_id(user or (users[0]["id"] if users else "default"))
+    return render("users.html", {
+        "request": request,
+        "users": users,
+        "selected_user": selected,
+        "summary": user_summary(selected),
+        "sessions": sessions_for_user(selected)[:20],
+        "notes": list_notes(str(_user_note_dir(selected)), user=selected)[:20],
+    })
+
+
+@app.get("/books", response_class=HTMLResponse)
+def books_page(request: Request, book: str = ""):
+    return render("books.html", {
+        "request": request,
+        "books": list_books(),
+        "selected_book": book,
+        "books_dir": str(_expand_path(get_books_dir(), BASE / "books")),
+    })
+
+
+@app.get("/backup", response_class=HTMLResponse)
+def backup_page(request: Request):
+    return render("backup.html", {
+        "request": request,
+        "backups": backup_script.list_backups(),
+    })
+
+
 @app.get("/api/profile")
 def api_profile():
     config = load_config()
@@ -576,6 +860,70 @@ def api_doctor(deep: int = Query(0)):
     m = re.search(r'(\d+)\s+PASS,\s*(\d+)\s+WARN,\s*(\d+)\s+FAIL', r.stdout)
     counts = {"pass": int(m.group(1)), "warn": int(m.group(2)), "fail": int(m.group(3))} if m else {}
     return {"ok": r.returncode == 0, "output": r.stdout, "deep": bool(deep), "counts": counts}
+
+
+@app.get("/api/backup")
+def api_backup_list():
+    return {"ok": True, "backups": backup_script.list_backups()}
+
+
+@app.post("/api/backup")
+def api_backup_create(data: dict = None):
+    data = data or {}
+    try:
+        result = backup_script.create_backup(include_books=bool(data.get("include_books")))
+        return {"ok": True, "backup": result}
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, 500)
+
+
+@app.get("/api/users")
+def api_users():
+    return {"ok": True, "users": [user_summary(u["id"]) for u in known_users()]}
+
+
+@app.get("/api/users/{user}")
+def api_user_detail(user: str):
+    user = sanitize_user_id(user)
+    return {
+        "ok": True,
+        "summary": user_summary(user),
+        "sessions": sessions_for_user(user),
+        "notes": list_notes(str(_user_note_dir(user)), user=user),
+    }
+
+
+@app.get("/api/users/{user}/export")
+def api_user_export(user: str):
+    archive_path = export_user_archive(user)
+    return FileResponse(
+        str(archive_path),
+        filename=archive_path.name,
+        media_type="application/zip",
+    )
+
+
+@app.post("/api/users/{user}/reset")
+def api_user_reset(user: str, data: dict = None):
+    data = data or {}
+    if data.get("confirm") != "RESET":
+        return JSONResponse({"ok": False, "error": "需要 confirm=RESET"}, 400)
+    return reset_user_data(user)
+
+
+@app.get("/api/books")
+def api_books():
+    return {"ok": True, "books_dir": str(_expand_path(get_books_dir(), BASE / "books")), "books": list_books()}
+
+
+@app.get("/api/books/inspect")
+def api_books_inspect(book: str = Query(""), preview: int = Query(20)):
+    if not book:
+        return JSONResponse({"ok": False, "error": "缺少 book 参数"}, 400)
+    result = inspect_book(book, preview=max(1, min(preview, 100)))
+    if not result.get("ok"):
+        return JSONResponse(result, 400)
+    return result
 
 
 # ── Bot API ──

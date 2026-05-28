@@ -279,7 +279,7 @@ def cmd_doctor(args=None):
 
     # 9. 脚本自检（含 note_quality.py）
     for script in ["extract_epub.py", "state.py", "write_note.py", "search_vault.py",
-                   "learning_contract.py", "note_quality.py"]:
+                   "learning_contract.py", "note_quality.py", "backup.py"]:
         sp = SCRIPTS_DIR / script
         check(sp.exists(), f"脚本 {script} 存在")
 
@@ -520,6 +520,27 @@ def cmd_quality(args):
         print(stdout)
     else:
         print(stdout)
+
+
+def cmd_backup(args):
+    """服务器/本地数据备份"""
+    script_args = []
+    if getattr(args, "include_books", False):
+        script_args.append("--include-books")
+    if getattr(args, "list", False):
+        script_args.append("--list")
+    if getattr(args, "json", False):
+        script_args.append("--json")
+    if getattr(args, "output_dir", ""):
+        script_args.extend(["--output-dir", args.output_dir])
+
+    stdout, stderr, rc = run_script("backup.py", *script_args)
+    if stdout:
+        print(stdout, end="" if stdout.endswith("\n") else "\n")
+    if stderr:
+        print(stderr, file=sys.stderr)
+    if rc != 0:
+        sys.exit(rc)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1270,6 +1291,12 @@ def main():
     p_quality.add_argument("note_path", help="笔记文件路径")
     p_quality.add_argument("--json", action="store_true", help="JSON 输出")
 
+    p_backup = sub.add_parser("backup", help="备份 config/state/notes/logs")
+    p_backup.add_argument("--include-books", action="store_true", help="同时备份 books 目录")
+    p_backup.add_argument("--output-dir", default="", help="备份输出目录")
+    p_backup.add_argument("--list", action="store_true", help="列出已有备份")
+    p_backup.add_argument("--json", action="store_true", help="JSON 输出")
+
     p_concepts = sub.add_parser("concepts", help="概念卡管理")
     p_concepts_sub = p_concepts.add_subparsers(dest="concepts_cmd")
     p_concepts_sub.add_parser("scan", help="盘点已有概念卡")
@@ -1318,6 +1345,8 @@ def main():
         cmd_bot(args)
     elif args.command == "quality":
         cmd_quality(args)
+    elif args.command == "backup":
+        cmd_backup(args)
     elif args.command == "concepts":
         cmd_concepts(args)
     elif args.command == "profile":

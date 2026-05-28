@@ -42,6 +42,9 @@ advanced:
   log_level: "info"
   backup_notes: true
 
+web:
+  password: ""                                # 可选；服务器公开访问时建议设置，或用环境变量 DEEPREAD_WEB_PASSWORD
+
 # LLM 配置（agent.py 独立运行时使用）
 # provider 留空则自动检测环境变量
 # 支持的 provider: deepseek / anthropic / openai

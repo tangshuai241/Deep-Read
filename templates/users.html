@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}用户管理 — DeepRead Studio{% endblock %}
+{% block content %}
+<h1>用户管理</h1>
+
+<div class="ops-grid">
+  <section class="ops-card">
+    <h2>用户列表</h2>
+    <div class="compact-list">
+      {% for u in users %}
+      <a class="compact-row {% if selected_user == u.id %}active{% endif %}" href="/users?user={{ u.id | urlencode }}">
+        <span class="row-main">{{ u.label }}</span>
+        <span class="row-meta">{{ u.sessions }} 会话 · {{ u.notes }} 笔记</span>
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="ops-card">
+    <h2>当前用户</h2>
+    <div class="kv">
+      <div><span>ID</span><strong>{{ summary.id }}</strong></div>
+      <div><span>状态目录</span><code>{{ summary.state_dir }}</code></div>
+      <div><span>笔记目录</span><code>{{ summary.notes_dir }}</code></div>
+      <div><span>会话</span><strong>{{ summary.sessions }}</strong></div>
+      <div><span>笔记</span><strong>{{ summary.notes }}</strong></div>
+      <div><span>学习契约</span><strong>{{ "有" if summary.has_contract else "无" }}</strong></div>
+    </div>
+    <div class="actions">
+      <button onclick="exportUser()">导出用户数据</button>
+      <button class="danger" onclick="resetUser()">重置用户</button>
+    </div>
+    <pre id="userResult" class="mini-output"></pre>
+  </section>
+</div>
+
+<div class="ops-grid">
+  <section class="ops-card">
+    <h2>最近会话</h2>
+    <div class="compact-list">
+      {% for s in sessions %}
+      <a class="compact-row" href="/sessions/{{ s.id }}">
+        <span class="row-main">{{ s.title }}</span>
+        <span class="row-meta">{{ s.updated[:16] }} · 用户{{ s.user_count }} / AI{{ s.ai_count }}</span>
+      </a>
+      {% endfor %}
+      {% if not sessions %}<p class="empty">暂无会话</p>{% endif %}
+    </div>
+  </section>
+
+  <section class="ops-card">
+    <h2>最近笔记</h2>
+    <div class="compact-list">
+      {% for n in notes %}
+      <a class="compact-row" href="/notes/view?path={{ n.path | urlencode }}">
+        <span class="row-main">{{ n.name }}</span>
+        <span class="row-meta">{{ n.book }}</span>
+      </a>
+      {% endfor %}
+      {% if not notes %}<p class="empty">暂无笔记</p>{% endif %}
+    </div>
+  </section>
+</div>
+
+<script>
+const selectedUser = {{ selected_user | tojson }};
+
+function exportUser() {
+  window.location = '/api/users/' + encodeURIComponent(selectedUser) + '/export';
+}
+
+function resetUser() {
+  const text = prompt('确认重置用户 ' + selectedUser + '？这会把该用户状态、会话、隔离笔记移动到归档目录。输入 RESET 继续。');
+  if (text !== 'RESET') return;
+  const out = document.getElementById('userResult');
+  out.textContent = '正在重置...';
+  fetch('/api/users/' + encodeURIComponent(selectedUser) + '/reset', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({confirm: 'RESET'})
+  }).then(r => r.json()).then(d => {
+    out.textContent = JSON.stringify(d, null, 2);
+    if (d.ok) setTimeout(() => location.reload(), 800);
+  }).catch(e => out.textContent = '失败: ' + e);
+}
+</script>
+{% endblock %}

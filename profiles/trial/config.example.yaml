@@ -39,6 +39,9 @@ advanced:
   log_level: "info"
   backup_notes: true
 
+web:
+  password: ""                            # 服务器公开 Web 控制台时建议设置，或用 DEEPREAD_WEB_PASSWORD
+
 llm:
   provider: ""                           # deepseek / anthropic / openai
   model: "deepseek-v4-pro"

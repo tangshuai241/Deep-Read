@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}书籍导入检查 — DeepRead Studio{% endblock %}
+{% block content %}
+<h1>书籍导入检查</h1>
+<p class="page-hint">目录: <code>{{ books_dir }}</code></p>
+
+<div class="ops-grid">
+  <section class="ops-card">
+    <h2>EPUB 文件</h2>
+    <div class="dir-bar">
+      <input id="bookInput" type="text" placeholder="输入书名或 EPUB 路径" value="{{ selected_book }}" style="flex:1">
+      <button onclick="inspectTypedBook()">检查</button>
+    </div>
+    <div class="compact-list">
+      {% for b in books %}
+      <button class="compact-row book-row" onclick="inspectBook({{ b.path | tojson }})">
+        <span class="row-main">{{ b.name }}</span>
+        <span class="row-meta">{{ (b.size / 1024 / 1024) | round(1) }} MB · {{ b.mtime[:16] }}</span>
+      </button>
+      {% endfor %}
+      {% if not books %}<p class="empty">books_dir 下暂无 EPUB</p>{% endif %}
+    </div>
+  </section>
+
+  <section class="ops-card">
+    <h2>校验结果</h2>
+    <div id="bookSummary" class="book-summary muted">选择一本 EPUB 开始检查。</div>
+    <div id="bookWarnings" class="warning-list"></div>
+  </section>
+</div>
+
+<section class="ops-card">
+  <h2>目录预览</h2>
+  <div id="tocPreview" class="toc-preview empty">暂无目录</div>
+</section>
+
+<script>
+function inspectTypedBook() {
+  const value = document.getElementById('bookInput').value.trim();
+  if (value) inspectBook(value);
+}
+
+function inspectBook(book) {
+  document.getElementById('bookInput').value = book;
+  document.getElementById('bookSummary').textContent = '检查中...';
+  document.getElementById('bookWarnings').innerHTML = '';
+  document.getElementById('tocPreview').textContent = '读取目录中...';
+
+  fetch('/api/books/inspect?preview=40&book=' + encodeURIComponent(book)).then(r => r.json()).then(d => {
+    if (!d.ok) throw new Error(d.error || '检查失败');
+    const stats = d.toc.stats;
+    document.getElementById('bookSummary').innerHTML =
+      '<div class="kv compact">' +
+      '<div><span>书名</span><strong>' + escapeHtml(d.book.title) + '</strong></div>' +
+      '<div><span>作者</span><strong>' + escapeHtml(d.book.author) + '</strong></div>' +
+      '<div><span>读取模式</span><strong>' + escapeHtml(d.read_mode) + '</strong></div>' +
+      '<div><span>章节</span><strong>' + stats.chapter_count + '</strong></div>' +
+      '<div><span>非章节项</span><strong>' + stats.frontmatter_count + '</strong></div>' +
+      '<div><span>正文异常</span><strong>' + stats.empty_chapter_count + ' 空 · ' + stats.short_chapter_count + ' 短</strong></div>' +
+      '</div>';
+
+    const warnings = d.toc.warnings || [];
+    document.getElementById('bookWarnings').innerHTML = warnings.length
+      ? warnings.map(w => '<div class="warn-line">' + escapeHtml(w) + '</div>').join('')
+      : '<div class="ok-line">目录校验未发现明显问题</div>';
+
+    const rows = (d.toc.preview || []).map(item =>
+      '<tr><td>' + item.index + '</td><td>' + escapeHtml(item.title) + '</td><td>' + item.word_count + '</td><td>' + escapeHtml(item.file) + '</td></tr>'
+    ).join('');
+    document.getElementById('tocPreview').innerHTML =
+      '<table class="data-table"><thead><tr><th>#</th><th>章节</th><th>字数</th><th>文件</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }).catch(e => {
+    document.getElementById('bookSummary').textContent = '检查失败';
+    document.getElementById('bookWarnings').innerHTML = '<div class="fail-line">' + escapeHtml(String(e.message || e)) + '</div>';
+    document.getElementById('tocPreview').textContent = '无目录';
+  });
+}
+
+function escapeHtml(text) {
+  return String(text || '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[s]));
+}
+
+{% if selected_book %}
+inspectBook({{ selected_book | tojson }});
+{% endif %}
+</script>
+{% endblock %}

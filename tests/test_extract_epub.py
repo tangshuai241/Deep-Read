@@ -10,7 +10,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from extract_epub import (resolve_book_path, parse_ncx, CHAPTER_PATTERN,
                            chinese_num_to_int,
                            get_book_meta, clean_html, read_epub_tolerant,
-                           find_chapter, extract_chapter_text)
+                           find_chapter, extract_chapter_text, build_toc,
+                           inspect_book)
 
 
 def setup_module():
@@ -182,6 +183,58 @@ def test_ncx_preface_does_not_steal_explicit_chapter_numbers():
         assert [e["title"] for e in chapters] == ["第一章 童年", "第二章 灾难"]
         assert find_chapter(ncx, "1")["title"] == "第一章 童年"
         assert find_chapter(ncx, "2")["title"] == "第二章 灾难"
+    finally:
+        os.unlink(epub_path)
+
+
+def test_build_toc_reports_frontmatter_without_numbering_it():
+    epub_path = _write_zip_epub({
+        "META-INF/container.xml": _minimal_container(),
+        "OEBPS/content.opf": _minimal_opf(
+            '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'
+            '<item id="intro" href="intro.xhtml" media-type="application/xhtml+xml"/>'
+            '<item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>'
+        ),
+        "OEBPS/toc.ncx": """<ncx><navMap>
+          <navPoint><navLabel><text>前言</text></navLabel><content src="intro.xhtml"/></navPoint>
+          <navPoint><navLabel><text>第一章 童年</text></navLabel><content src="chapter1.xhtml"/></navPoint>
+        </navMap></ncx>""",
+        "OEBPS/intro.xhtml": "<html><body><h1>前言</h1><p>前言内容足够长，不应该抢章节编号。</p></body></html>",
+        "OEBPS/chapter1.xhtml": "<html><body><h1>第一章 童年</h1><p>童年正文内容足够长，应该被 chapter 1 命中。</p></body></html>",
+    })
+    try:
+        book = read_epub_tolerant(epub_path)
+        ncx = parse_ncx(book)
+        toc = build_toc(book, ncx)
+
+        assert toc["stats"]["chapter_count"] == 1
+        assert toc["stats"]["frontmatter_count"] == 1
+        assert toc["preview"][0]["index"] == 1
+        assert toc["preview"][0]["title"] == "第一章 童年"
+        assert any("非章节项" in w for w in toc["warnings"])
+    finally:
+        os.unlink(epub_path)
+
+
+def test_inspect_book_returns_structured_toc(monkeypatch):
+    epub_path = _write_zip_epub({
+        "META-INF/container.xml": _minimal_container(),
+        "OEBPS/content.opf": _minimal_opf(
+            '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'
+            '<item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>'
+        ),
+        "OEBPS/toc.ncx": """<ncx><navMap>
+          <navPoint><navLabel><text>第一章 起点</text></navLabel><content src="chapter1.xhtml"/></navPoint>
+        </navMap></ncx>""",
+        "OEBPS/chapter1.xhtml": "<html><body><h1>第一章 起点</h1><p>正文内容足够长，用来验证 inspect_book 的结构化输出。</p></body></html>",
+    })
+    try:
+        monkeypatch.setattr("extract_epub.load_config", lambda: str(Path(epub_path).parent))
+        data = inspect_book(Path(epub_path).name)
+
+        assert data["ok"] is True
+        assert data["book"]["chapters"] == 1
+        assert data["toc"]["preview"][0]["title"] == "第一章 起点"
     finally:
         os.unlink(epub_path)
 

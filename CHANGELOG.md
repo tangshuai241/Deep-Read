@@ -6,6 +6,17 @@
 
 ## 更新日志
 
+### 2026-05-28 — v2.5.7 Web 安全、备份、用户管理与书籍检查
+
+| 更新内容 | 说明 |
+|------|------|
+| Web 登录密码 | 新增 `/login`，设置 `DEEPREAD_WEB_PASSWORD` 或 `config.yaml` 的 `web.password` 后，Web 页面和 API 自动启用登录保护 |
+| 服务器备份 | 新增 `scripts/backup.py`、`python cli.py backup`、Web `/backup`，默认备份 `config/state/notes/logs`，可选包含 `books` |
+| 用户管理页 | 新增 `/users`，可查看某用户状态目录、笔记目录、会话数、笔记数、最近会话和最近笔记 |
+| 用户导出/重置 | 新增 `/api/users/{user}/export` 和 `/api/users/{user}/reset`；重置会移动到 `state/_reset_archive/`，避免直接删除 |
+| 书籍导入检查 | 新增 `/books` 和 `/api/books/inspect`，支持 EPUB 目录预览、章节数量、前言/目录非章节项、缺号/重复/短章节校验 |
+| EPUB inspect | `extract_epub.py --inspect --json` 输出结构化目录诊断，便于服务器排查朋友上传的书籍 |
+
 ### 2026-05-28 — v2.5.5 多用户数据隔离
 
 | 更新内容 | 说明 |

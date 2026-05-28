@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}服务器备份 — DeepRead Studio{% endblock %}
+{% block content %}
+<h1>服务器备份</h1>
+<p class="page-hint">默认备份 config、state、notes、logs。EPUB 体积较大，只有勾选后才会包含 books。</p>
+
+<section class="ops-card">
+  <h2>创建备份</h2>
+  <label class="check-line">
+    <input type="checkbox" id="includeBooks">
+    包含 books 目录
+  </label>
+  <div class="actions">
+    <button onclick="createBackup()">立即备份</button>
+    <button onclick="loadBackups()">刷新列表</button>
+  </div>
+  <pre id="backupResult" class="mini-output"></pre>
+</section>
+
+<section class="ops-card">
+  <h2>已有备份</h2>
+  <div id="backupList" class="compact-list">
+    {% for b in backups %}
+    <div class="compact-row">
+      <span class="row-main">{{ b.name }}</span>
+      <span class="row-meta">{{ (b.size / 1024 / 1024) | round(2) }} MB · {{ b.mtime }}</span>
+    </div>
+    {% endfor %}
+    {% if not backups %}<p class="empty">暂无备份</p>{% endif %}
+  </div>
+</section>
+
+<script>
+function createBackup() {
+  const out = document.getElementById('backupResult');
+  out.textContent = '正在创建备份...';
+  fetch('/api/backup', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({include_books: document.getElementById('includeBooks').checked})
+  }).then(r => r.json()).then(d => {
+    out.textContent = JSON.stringify(d, null, 2);
+    loadBackups();
+  }).catch(e => out.textContent = '失败: ' + e);
+}
+
+function loadBackups() {
+  fetch('/api/backup').then(r => r.json()).then(d => {
+    const list = document.getElementById('backupList');
+    const backups = d.backups || [];
+    list.innerHTML = backups.length ? backups.map(b =>
+      '<div class="compact-row"><span class="row-main">' + b.name + '</span><span class="row-meta">' +
+      (b.size / 1024 / 1024).toFixed(2) + ' MB · ' + b.mtime + '</span></div>'
+    ).join('') : '<p class="empty">暂无备份</p>';
+  });
+}
+</script>
+{% endblock %}
