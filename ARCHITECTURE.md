@@ -1,7 +1,7 @@
 # DeepRead 架构与工作流
 
-> **版本**：v2.5  
-> **日期**：2026-05-27  
+> **版本**：v2.5.7  
+> **日期**：2026-05-28  
 > **定位**：本地优先、IM-first 的 AI 深度阅读教练。手机 IM 负责学习对话，Obsidian/Markdown 负责沉淀，Web 负责运维控制。  
 > **核心原则**：单仓库双发行形态、本地优先、配置隔离、IM 主入口、Obsidian 兼容、Wiki/概念卡增强、Web 不替代学习对话。
 
@@ -91,8 +91,26 @@ DeepRead 不是单纯的网页阅读器，也不是只给 Claude Code 使用的 
 │                                                             │
 │  server.py                                                  │
 │  /setup /modes /concepts /doctor /sessions /notes /compare  │
-│  只负责状态、运维、质量检查，不作为主学习界面                  │
+│  /users /books /backup /login                               │
+│  只负责状态、运维、质量检查、用户与书籍管理，不作为主学习界面     │
 └─────────────────────────────────────────────────────────────┘
+```
+
+### v2.5.7 运维增强
+
+| 能力 | 入口 | 说明 |
+|---|---|---|
+| Web 登录 | `/login` | 设置 `DEEPREAD_WEB_PASSWORD` 或 `config.yaml -> web.password` 后启用 |
+| 用户管理 | `/users` | 查看用户状态、会话、笔记；导出或归档重置单个用户 |
+| 书籍检查 | `/books` | EPUB 目录预览、章节校验、分卷编号重置提示、短章/空章检测 |
+| 服务器备份 | `/backup` / `python cli.py backup` | 默认备份 `config/state/notes/logs`，可选包含 `books` |
+| EPUB 诊断 | `scripts/extract_epub.py --inspect --json` | 输出结构化目录与章节诊断 |
+
+服务器常驻服务建议：
+
+```text
+deepread-bot.service  -> 飞书 Bot 长期监听
+deepread-web.service  -> Web 控制台长期运行，端口 8765
 ```
 
 ---
