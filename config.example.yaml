@@ -1,0 +1,50 @@
+# ============================================================
+# Book Toolchain — 统一配置
+# 使用方式：cp config.example.yaml config.yaml → 编辑 → 运行
+# ============================================================
+
+# === 必填：LLM 配置（4D 拆解 + DeepRead 共用） ===
+llm:
+  # 推荐 DeepSeek：https://platform.deepseek.com 注册获取 API Key
+  # 也支持任何 OpenAI 兼容接口（OpenAI / Anthropic / 本地模型 等）
+  provider: "deepseek"
+  api_key: ""                   # 你的 API Key（必填）
+  model: "deepseek-v4-pro"     # DeepSeek 最新模型；也可用 deepseek-v4-flash（更快更省）
+  base_url: "https://api.deepseek.com"    # DeepSeek 官方 API 地址
+  # 如果用其他兼容接口，修改 provider / base_url 即可
+  # 例：OpenAI → provider: "openai" , base_url: "https://api.openai.com/v1"
+
+# === 必填：路径配置 ===
+paths:
+  books_dir: "~/TaskOS/books"              # EPUB + 4D 拆解 JSON 统一存储
+  notes_dir: "~/Documents/reading-notes"    # 阅读笔记输出目录
+
+# === 选填：邮件发送（不启用则整个 email 模块跳过） ===
+email:
+  enabled: false                 # 改为 true 启用 EPUB 邮件发送
+  smtp_host: ""                  # SMTP 服务器，例 smtp.qq.com / smtp.gmail.com
+  smtp_port: 465
+  smtp_ssl: true
+  smtp_sender: ""                # 发件邮箱地址
+  smtp_password: ""              # SMTP 授权码（推荐用环境变量 SMTP_PASSWORD）
+
+# === 选填：Obsidian 集成 ===
+obsidian:
+  enabled: false                 # 改为 true 启用 Obsidian vault 写入
+  vault_dir: ""                  # Obsidian vault 根路径
+  wiki_integration_dir: ""       # LLM-Wiki 整合目录（可选）
+
+# === 选填：用户信息（DeepRead 使用） ===
+user:
+  name: ""
+  preferred_name: ""
+
+# === 选填：阅读偏好 ===
+reading:
+  max_words_per_session: 8000
+  auto_advance_stage: false
+
+# === 高级：DeepRead 内部状态 ===
+advanced:
+  state_dir: ""                  # 留空则自动使用 deepread/state/
+  log_level: "info"

@@ -1,0 +1,40 @@
+# DeepRead 配置文件
+# 从仓库根目录 config.yaml 读取共用配置（llm / paths / user）
+# 本文件仅保留 DeepRead 特有的阅读偏好和内部状态
+
+# === 阅读偏好 ===
+reading:
+  max_words_per_session: 8000
+  auto_advance_stage: false
+
+# === 笔记格式 ===
+note:
+  template: "obsidian-three-section"
+  use_wikilinks: true
+  date_in_frontmatter: false
+
+# === 集成开关 ===
+integrations:
+  weread:
+    enabled: false
+    api_key_env: "WEREAD_API_KEY"
+    api_entry: "https://i.weread.qq.com/api/agent/gateway"
+  obsidian:
+    enabled: false       # 改为 true 并在根 config.yaml 配置 obsidian.vault_dir
+  wiki:
+    enabled: false
+
+# === 认知画像 ===
+cognition:
+  enabled: true
+  update_frequency: "chapter_end"
+
+# === 高级 ===
+advanced:
+  log_level: "info"
+  backup_notes: true
+
+# === 运行时配置（首次运行自动从根 config.yaml 继承） ===
+# 不需要手动编辑以下内容：
+profile:
+  name: "default"

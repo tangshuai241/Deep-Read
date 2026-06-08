@@ -1,0 +1,1184 @@
+#!/usr/bin/env python3
+"""
+DeepRead Agent — 独立 LLM Agent 运行时（多后端）
+替代 Claude Code 在 DeepRead 中的角色：对话循环 + 工具调度 + 会话管理
+
+支持后端: Anthropic / DeepSeek / OpenAI 兼容
+
+用法:
+  python agent.py                          # 新对话
+  python agent.py --resume <session_id>    # 恢复会话
+  python agent.py --list-sessions          # 列出会话
+  python agent.py --provider deepseek --model deepseek-chat
+
+配置: config.yaml 中 llm 段，或环境变量
+  ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from scripts.logger import (log_session_start, log_session_end, log_tool_call,
+                              log_api_call, log_error)
+
+SCRIPTS_DIR = Path(__file__).parent / "scripts"
+SKILL_DIR = None  # 延迟初始化
+SESSION_DIR = Path(__file__).parent / "state" / "sessions"
+
+THINKING_ENABLE_COMMANDS = (
+    "/深思", "/慢思考", "/thinking", "/think", "/reason",
+    "深思", "慢思考",
+)
+THINKING_DISABLE_COMMANDS = (
+    "/普通", "/快答", "/快速", "/no-thinking", "/nothink", "/normal",
+    "普通", "快答",
+)
+THINKING_FALLBACK_ENABLED = "请用更深入的方式继续当前阅读任务。"
+THINKING_FALLBACK_DISABLED = "请用普通模式继续当前阅读任务。"
+THINKING_DEEP_STAGES = {"feynman", "socratic", "associate", "wrapup"}
+
+
+def split_thinking_directive(text):
+    """Return (clean_text, override) where override is enabled/disabled/None."""
+    raw = str(text or "")
+    stripped = raw.strip()
+    lowered = stripped.lower()
+
+    for cmd in THINKING_ENABLE_COMMANDS:
+        cmd_lower = cmd.lower()
+        if lowered == cmd_lower or lowered.startswith((cmd_lower + " ", cmd_lower + ":", cmd_lower + "：")):
+            clean = stripped[len(cmd):].strip(" :：")
+            return clean or THINKING_FALLBACK_ENABLED, "enabled"
+
+    for cmd in THINKING_DISABLE_COMMANDS:
+        cmd_lower = cmd.lower()
+        if lowered == cmd_lower or lowered.startswith((cmd_lower + " ", cmd_lower + ":", cmd_lower + "：")):
+            clean = stripped[len(cmd):].strip(" :：")
+            return clean or THINKING_FALLBACK_DISABLED, "disabled"
+
+    return raw, None
+
+
+def should_enable_auto_thinking(text, stage=""):
+    """Cheap router for DeepSeek thinking=auto."""
+    stripped = str(text or "").strip()
+    if not stripped:
+        return False
+
+    compact = "".join(stripped.lower().split())
+    light_exact = {
+        "你好", "你好啊", "hi", "hello", "hey", "在吗", "在不在",
+        "进度", "查看进度", "状态", "帮助", "help", "/help",
+        "复习", "随机复习", "搜索", "查找",
+    }
+    if compact in light_exact:
+        return False
+
+    light_prefixes = ("搜索", "查找", "进度", "查看进度", "/help")
+    if any(compact.startswith(prefix) for prefix in light_prefixes):
+        return False
+
+    deep_keywords = (
+        "精读", "继续读", "读《", "第", "下一阶段", "进入下一阶段",
+        "费曼", "苏格拉底", "批判", "反驳", "挑战",
+        "联想", "关联", "收尾", "总结", "总结我的回答", "复盘",
+        "解释", "为什么", "怎么理解", "盲点", "反思",
+        "深入", "深度", "慢思考", "深思", "推理",
+    )
+    if any(keyword in stripped for keyword in deep_keywords):
+        return True
+
+    if stage in THINKING_DEEP_STAGES:
+        if compact in {"继续", "下一步", "跳过", "进入下一阶段"}:
+            return True
+        if len(stripped) >= 20:
+            return True
+
+    return len(stripped) >= 80
+
+
+# ═══════════════════════════════════════════════════════
+# 配置
+# ═══════════════════════════════════════════════════════
+
+def load_config():
+    """Load DeepRead config, merging parent (repo root) config.yaml as base."""
+    own_path = Path(__file__).parent / "config.yaml"
+    parent_path = Path(__file__).parent.parent / "config.yaml"
+
+    merged = {}
+
+    # 1. Load repo root config as base (llm / paths / user / email)
+    if parent_path.exists():
+        try:
+            import yaml
+            with open(parent_path, encoding='utf-8') as f:
+                merged = yaml.safe_load(f) or {}
+        except ImportError:
+            pass
+
+    # 2. Overlay deepread's own config (reading / note / advanced / integrations)
+    if own_path.exists():
+        try:
+            import yaml
+            with open(own_path, encoding='utf-8') as f:
+                own = yaml.safe_load(f) or {}
+            # Deep-merge: own overrides parent for same keys
+            for key, val in own.items():
+                if isinstance(val, dict) and isinstance(merged.get(key), dict):
+                    merged[key] = {**merged[key], **val}
+                else:
+                    merged[key] = val
+        except ImportError:
+            pass
+
+    return merged
+
+
+def resolve_skill_dir(config):
+    """解析 Skill 目录：config → env → 项目自带 → Claude Code 默认"""
+    global SKILL_DIR
+    if SKILL_DIR:
+        return SKILL_DIR
+
+    # 1. config.yaml
+    cfg_path = config.get("paths", {}).get("skill_dir", "")
+    if cfg_path and Path(cfg_path).exists():
+        SKILL_DIR = Path(cfg_path)
+        return SKILL_DIR
+
+    # 2. 环境变量
+    env_path = os.environ.get("DEEPREAD_SKILL_DIR", "")
+    if env_path and Path(env_path).exists():
+        SKILL_DIR = Path(env_path)
+        return SKILL_DIR
+
+    # 3. 项目自带 skill/ 目录
+    bundled = Path(__file__).parent / "skill"
+    if bundled.exists():
+        SKILL_DIR = bundled
+        return SKILL_DIR
+
+    # 4. Claude Code 默认路径（开发者回退）
+    claude_skill = Path.home() / ".claude" / "skills" / "deep-read"
+    if claude_skill.exists():
+        SKILL_DIR = claude_skill
+        return SKILL_DIR
+
+    SKILL_DIR = bundled  # 返回默认值，即使不存在
+    return SKILL_DIR
+
+
+def load_system_prompt(config):
+    skill_dir = resolve_skill_dir(config)
+    skill = skill_dir / "SKILL.md"
+    if not skill.exists():
+        return "你是 DeepRead 深度阅读教练。运用费曼学习法和苏格拉底提问引导用户理解阅读内容。"
+
+    with open(skill, encoding='utf-8') as f:
+        prompt = f.read()
+
+    for ref in ["dialogue-flow.md", "note-format.md", "fsm-spec.md", "learning-contract.md", "reading-modes.md"]:
+        rp = skill_dir / "references" / ref
+        if rp.exists():
+            with open(rp, encoding='utf-8') as f:
+                prompt += f"\n\n---\n## {ref}\n\n{f.read()}"
+
+    prompt += "\n\n重要：你必须调用工具来操作数据。不知道 EPUB 内容→调 extract_epub。不要直接写笔记→调 write_note。不知道状态→调 read_state。不知道学习路线/阶段是否通过→调 learning_contract。搜索知识库→调 search_vault。判断或切换阅读模式→调 reading_mode。"
+    prompt += "\n\n阅读模式规则：用户开始读一本新书时，先用 reading_mode suggest 判断适合的模式。判断明确时直接进入，不多问。不确定时只问一个选择问题。用户说'考试模式''工具书模式''概念精读模式'时用户优先，立刻切换。切换模式后必须立即调用 learning_contract init/update 写入契约（用到 reading_mode set 返回的 reading_mode/mode_reason 等字段），并简短说明'接下来我会按XX方式带你读'。reading_mode set 本身不写契约，必须紧接着调用 learning_contract。"
+    prompt += "\n\n预读分析：如果用户开始一本新书，先尝试调用 load_pre_read_context 检查是否有 4D 拆解的预读分析。有预读时，你会获得：全书骨架、核心概念列表、论证链、矛盾标注、可信度评分。这些信息能显著提升追问质量——帮你从'这个词什么意思'提档到'这个概念在全书体系中是什么位置'。如果返回'未找到'说明该书尚未被 4D 拆解，正常开始即可。预读分析不会取代你的判断——矛盾标注处的'可信度有限'提示意味着你应引导用户自行判断。"
+    return prompt
+
+
+# ═══════════════════════════════════════════════════════
+# 脚本执行
+# ═══════════════════════════════════════════════════════
+
+def run_script(name, *args):
+    script = SCRIPTS_DIR / name
+    if not script.exists():
+        return json.dumps({"ok": False, "error": f"脚本不存在: {name}"})
+    cmd = [sys.executable, str(script)] + list(args)
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding='utf-8', errors='replace', env=env,
+                                timeout=30)
+    except subprocess.TimeoutExpired:
+        return json.dumps({"ok": False, "error": "脚本执行超时"})
+
+    out = result.stdout.strip()
+    if result.returncode != 0:
+        err = result.stderr.strip()
+        if err.startswith("{"):
+            return err
+        return json.dumps({"ok": False, "error": err[:500]})
+    return out if out else "{}"
+
+
+def execute_tool(name, params, user_id="default"):
+    p = params or {}
+    if name == "extract_epub":
+        return run_script("extract_epub.py", "--book", str(p.get("book", "")),
+                          "--chapter", str(p.get("chapter", "")), "--json")
+    elif name == "write_note":
+        action = p.get("action", "create")
+        args = []
+        for key, flag in [("book", "--book"), ("concept", "--concept"),
+                          ("chapter", "--chapter"), ("author", "--author"),
+                          ("category", "--category"), ("tags", "--tags"),
+                          ("quote", "--quote"), ("understanding", "--understanding"),
+                          ("path", "--path"), ("section", "--section"),
+                          ("content", "--content"), ("explore", "--explore")]:
+            if key in p and p[key]:
+                args.extend([flag, str(p[key])])
+        return run_script("write_note.py", "--user", user_id, action, *args)
+    elif name == "read_state":
+        return run_script("state.py", "--user", user_id, "show")
+    elif name == "update_state":
+        args = []
+        for key, flag in [("stage", "--stage"), ("book", "--book"),
+                          ("chapter", "--chapter"), ("section", "--section"),
+                          ("goal", "--goal"), ("summary", "--summary")]:
+            if key in p and p[key]:
+                args.extend([flag, str(p[key])])
+        for key, flag in [("blindspot", "--add-blindspot"),
+                          ("concept", "--add-concept"),
+                          ("profile", "--add-profile")]:
+            if key in p and p[key]:
+                args.extend([flag, str(p[key])])
+        return run_script("state.py", "--user", user_id, "set", *args) if args else json.dumps({"ok": True})
+    elif name == "search_vault":
+        args = ["--json", "--limit", str(p.get("limit", 10))]
+        scope = str(p.get("scope", "core") or "core")
+        mode = str(p.get("mode", "hybrid") or "hybrid")
+        if p.get("suggest_links"):
+            args.extend(["--suggest-links", "--scope", scope])
+            if p.get("note_path"):
+                args.extend(["--note-path", str(p.get("note_path"))])
+        else:
+            query = p.get("query") or p.get("keyword") or ""
+            args.extend(["--query", str(query), "--mode", mode, "--scope", scope])
+        if p.get("include_wiki", True):
+            args.append("--include-wiki")
+        return run_script("search_vault.py", *args)
+    elif name == "learning_contract":
+        action = p.get("action", "show")
+        global_args = ["--user", user_id, "--json"]
+        args = []
+        if action == "init":
+            for key, flag in [("book", "--book"), ("chapter", "--chapter"),
+                              ("section", "--section"), ("goal", "--goal"),
+                              ("profile", "--profile"), ("book_type", "--book-type"),
+                              ("reading_mode", "--reading-mode"), ("mode_reason", "--mode-reason"),
+                              ("A_core", "--A_core"), ("B_important", "--B_important"),
+                              ("C_evidence", "--C_evidence"), ("D_application", "--D_application")]:
+                if key in p and p[key]:
+                    value = p[key]
+                    if isinstance(value, (list, dict)):
+                        value = json.dumps(value, ensure_ascii=False)
+                    args.extend([flag, str(value)])
+        elif action == "update":
+            for key, flag in [("point", "--point"), ("group", "--group"),
+                              ("status", "--status"), ("evidence", "--evidence"),
+                              ("event", "--event"), ("deposit", "--deposit"),
+                              ("note", "--note")]:
+                if key in p and p[key]:
+                    args.extend([flag, str(p[key])])
+        elif action == "check":
+            args.extend(["--stage", str(p.get("stage", "wrapup"))])
+        elif action not in ("show", "report"):
+            return json.dumps({"ok": False, "error": f"未知 learning_contract action: {action}"}, ensure_ascii=False)
+        return run_script("learning_contract.py", *global_args, action, *args)
+    elif name == "reading_mode":
+        return execute_reading_mode(p)
+    elif name == "load_pre_read_context":
+        return run_script("preload_analysis.py", "--book",
+                          str(p.get("book", p.get("title", ""))),
+                          "--mode", "full", "--json")
+    return json.dumps({"ok": False, "error": f"未知工具: {name}"})
+
+
+def execute_reading_mode(p):
+    """执行 reading_mode 工具调用"""
+    action = p.get("action", "suggest")
+    text = p.get("text", "")
+    mode_key = p.get("mode", "")
+    profile = p.get("profile", "personal")
+
+    try:
+        from scripts.reading_modes import (suggest_mode, get_mode, list_modes,
+                                           allowed_modes, mode_hint_text, MODE_QUICK_NAMES)
+    except ImportError:
+        return json.dumps({"ok": False, "error": "reading_modes 模块不可用"}, ensure_ascii=False)
+
+    if action == "suggest":
+        key, mode_def, score = suggest_mode(text, profile)
+        return json.dumps({
+            "ok": True, "action": "suggest",
+            "reading_mode": key, "mode_name": mode_def["name"],
+            "mode_desc": mode_def["desc"], "score": score,
+            "mode_reason": mode_def["desc"] if score > 0 else "默认使用概念精读",
+            "sections": mode_def.get("sections", []),
+            "hint": mode_hint_text(key),
+        }, ensure_ascii=False)
+
+    elif action == "show":
+        mode_def = get_mode(mode_key) if mode_key else None
+        if not mode_def:
+            return json.dumps({"ok": False, "error": f"未知模式: {mode_key}",
+                               "available": allowed_modes(profile)}, ensure_ascii=False)
+        return json.dumps({
+            "ok": True, "action": "show",
+            "reading_mode": mode_key, "mode_name": mode_def["name"],
+            "mode_desc": mode_def["desc"], "sections": mode_def.get("sections", []),
+            "hint": mode_hint_text(mode_key),
+        }, ensure_ascii=False)
+
+    elif action == "set":
+        return json.dumps({
+            "ok": True, "action": "set",
+            "reading_mode": mode_key,
+            "message": f"已设置为 {mode_key} 模式。请通过 learning_contract init 写入契约。",
+            "hint": mode_hint_text(mode_key) if mode_key else "",
+        }, ensure_ascii=False)
+
+    elif action == "list":
+        modes = list_modes(profile)
+        return json.dumps({"ok": True, "action": "list", "profile": profile,
+                           "modes": [{"key": m["key"], "name": m["name"]} for m in modes]},
+                          ensure_ascii=False)
+
+    # 快捷名称匹配
+    clean = text.strip()
+    if clean in MODE_QUICK_NAMES:
+        key = MODE_QUICK_NAMES[clean]
+        mode_def = get_mode(key)
+        return json.dumps({
+            "ok": True, "action": "quick_match",
+            "reading_mode": key, "mode_name": mode_def["name"],
+            "hint": f"匹配到 {mode_def['name']} 模式，请用 action='set' 确认切换",
+        }, ensure_ascii=False)
+
+    return json.dumps({"ok": False, "error": f"未知 reading_mode action: {action}"}, ensure_ascii=False)
+
+
+# ═══════════════════════════════════════════════════════════
+# 工具定义（两种格式）
+# ═══════════════════════════════════════════════════════════
+
+TOOLS_ANTHROPIC = [
+    {
+        "name": "extract_epub",
+        "description": "从 EPUB 提取指定章节文本。必须先调用此工具获取原文，不能假装读过。章节号用数字。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "book": {"type": "string", "description": "EPUB 文件名，如 思考快与慢.epub"},
+                "chapter": {"type": "string", "description": "章节号，如 5"}
+            },
+            "required": ["book", "chapter"]
+        }
+    },
+    {
+        "name": "write_note",
+        "description": "写入/更新 Obsidian 笔记。渐进式：create(阶段1)→update(阶段2)→append(阶段3)→finalize(阶段4)。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["create", "update", "append", "finalize", "compile"]},
+                "book": {"type": "string"}, "concept": {"type": "string"},
+                "chapter": {"type": "string"}, "author": {"type": "string"},
+                "category": {"type": "string"}, "tags": {"type": "string"},
+                "quote": {"type": "string"}, "understanding": {"type": "string"},
+                "path": {"type": "string", "description": "笔记路径（update/append/finalize必填）"},
+                "section": {"type": "string", "description": "引用原文/我的理解/让我想到/待探索"},
+                "content": {"type": "string"}, "explore": {"type": "string"}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "read_state", "description": "读取当前阅读状态：书、章节、阶段、概念、盲点。每次对话开始和阶段切换前必须调用。",
+        "input_schema": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+        "name": "update_state",
+        "description": "更新阅读状态。阶段切换时必须调用。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "stage": {"type": "string", "enum": ["idle", "init", "feynman", "socratic", "associate", "wrapup"]},
+                "book": {"type": "string"}, "chapter": {"type": "string"},
+                "section": {"type": "string"}, "goal": {"type": "string"},
+                "summary": {"type": "string"}, "blindspot": {"type": "string"},
+                "concept": {"type": "string"}, "profile": {"type": "string"}
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "search_vault",
+        "description": "搜索 Obsidian 核心知识库找关联旧笔记/概念/Wiki 枢纽。阶段3联想和阶段4收尾前使用，默认 core+Wiki 混合检索。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "兼容旧参数：搜索关键词"},
+                "query": {"type": "string", "description": "推荐：用当前概念、用户回答、章节摘要组成的完整查询"},
+                "mode": {"type": "string", "enum": ["keyword", "hybrid"], "description": "默认 hybrid"},
+                "scope": {"type": "string", "enum": ["notes", "core", "wiki", "all"], "description": "默认 core"},
+                "include_wiki": {"type": "boolean", "description": "默认 true"},
+                "suggest_links": {"type": "boolean", "description": "为整篇笔记生成正文链接/延伸链接候选"},
+                "note_path": {"type": "string", "description": "suggest_links=true 时必填"},
+                "limit": {"type": "integer", "description": "返回数量，默认10"}
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "learning_contract",
+        "description": "读写章节学习契约：知识地图、A/B/C/D 分级、阶段通过检查、覆盖报告。每轮对话前和阶段切换前使用。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["init", "show", "update", "check", "report"]},
+                "book": {"type": "string"},
+                "chapter": {"type": "string"},
+                "section": {"type": "string"},
+                "goal": {"type": "string"},
+                "profile": {"type": "string", "description": "trial 或 personal"},
+                "book_type": {"type": "string", "description": "书籍类型，如 方法工具型/概念思想型"},
+                "reading_mode": {"type": "string", "description": "阅读模式键名"},
+                "mode_reason": {"type": "string", "description": "模式选择依据"},
+                "A_core": {"type": "array", "items": {"type": "string"}, "description": "必须掌握的核心机制"},
+                "B_important": {"type": "array", "items": {"type": "string"}, "description": "重要但可抽样讨论的概念/表现/对比"},
+                "C_evidence": {"type": "array", "items": {"type": "string"}, "description": "实验、例子、数据、作者论据"},
+                "D_application": {"type": "array", "items": {"type": "string"}, "description": "现实应用、个人经验、反例、边界条件"},
+                "point": {"type": "string", "description": "知识点标题"},
+                "group": {"type": "string", "enum": ["A_core", "B_important", "C_evidence", "D_application"]},
+                "status": {"type": "string", "enum": ["pending", "covered", "unclear", "passed"]},
+                "evidence": {"type": "string", "description": "用户自己的解释、追问结果或沉淀说明"},
+                "event": {"type": "string", "enum": ["boundary_or_counterexample", "application_probe", "old_note_connection", "personal_association"]},
+                "deposit": {"type": "string", "enum": ["understanding", "associations", "explore"]},
+                "note": {"type": "string", "description": "相关笔记路径"},
+                "stage": {"type": "string", "enum": ["feynman", "socratic", "associate", "wrapup"]}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "reading_mode",
+        "description": "判断/切换/查看阅读模式。用户开始读一本新书时先用 suggest 判断模式；用户要求切换时用 set；查看当前可用模式时用 list。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["suggest", "show", "set", "list"]},
+                "text": {"type": "string", "description": "书名、章节描述或用户输入（suggest 时使用）"},
+                "mode": {"type": "string", "description": "模式键名（set/show 时使用）"},
+                "profile": {"type": "string", "description": "trial 或 personal，默认 personal"}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "load_pre_read_context",
+        "description": "加载 4D 拆解管线的预读分析上下文（如有）。包含全书骨架、核心概念、论证链、矛盾标注、可信度评分。在用户开始一本新书时自动调用；在深入讨论具体概念或论证时按需调用获取完整上下文。不需要参数——Agent 能从当前阅读状态自动推断书名。",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    }
+]
+
+
+def to_openai_tools():
+    """转换为 OpenAI/DeepSeek function calling 格式"""
+    result = []
+    for t in TOOLS_ANTHROPIC:
+        result.append({
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": {
+                    "type": "object",
+                    "properties": t["input_schema"]["properties"],
+                    "required": t["input_schema"].get("required", [])
+                }
+            }
+        })
+    return result
+
+
+# ═══════════════════════════════════════════════════════
+# LLM Provider 抽象
+# ═══════════════════════════════════════════════════════
+
+PROVIDER_CONFIGS = {
+    "deepseek": {
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com",
+        "key_env": "DEEPSEEK_API_KEY",
+        "default_model": "deepseek-v4-pro",
+        "type": "openai",
+    },
+    "anthropic": {
+        "name": "Anthropic",
+        "base_url": None,
+        "key_env": "ANTHROPIC_API_KEY",
+        "default_model": "claude-sonnet-4-6",
+        "type": "anthropic",
+    },
+    "openai": {
+        "name": "OpenAI",
+        "base_url": "https://api.openai.com",
+        "key_env": "OPENAI_API_KEY",
+        "default_model": "gpt-4o",
+        "type": "openai",
+    },
+}
+
+
+def detect_provider(config, cli_provider):
+    """检测使用哪个后端"""
+    # 1. CLI 参数优先
+    if cli_provider and cli_provider in PROVIDER_CONFIGS:
+        return cli_provider, PROVIDER_CONFIGS[cli_provider]
+
+    # 2. config.yaml 指定
+    cfg_provider = config.get("llm", {}).get("provider", "")
+    if cfg_provider and cfg_provider in PROVIDER_CONFIGS:
+        return cfg_provider, PROVIDER_CONFIGS[cfg_provider]
+
+    # 3. 根据环境变量自动检测
+    for pid, pcfg in PROVIDER_CONFIGS.items():
+        if os.environ.get(pcfg["key_env"]):
+            return pid, pcfg
+
+    # 4. 默认 DeepSeek
+    return "deepseek", PROVIDER_CONFIGS["deepseek"]
+
+
+def get_api_key(pcfg, config):
+    """获取 API Key：环境变量 > config.yaml"""
+    key = os.environ.get(pcfg["key_env"], "")
+    if key:
+        return key
+    return config.get("llm", {}).get("api_key", "")
+
+
+def get_model(pcfg, config, cli_model):
+    """获取模型名：CLI > config > provider 默认"""
+    if cli_model:
+        return cli_model
+    cfg_model = config.get("llm", {}).get("model", "")
+    return cfg_model if cfg_model else pcfg["default_model"]
+
+
+class LLMProvider:
+    """统一 LLM 调用接口"""
+
+    def __init__(self, provider_id, pcfg, api_key, model, config=None):
+        self.provider_id = provider_id
+        self.name = pcfg["name"]
+        self.api_type = pcfg["type"]
+        self.model = model
+        self.client = None
+        self.extra_body = {}
+        self.thinking_mode = None
+
+        # 自定义 base_url（config 优先于 provider 默认）
+        base_url = pcfg.get("base_url", "")
+        if config:
+            custom_url = config.get("llm", {}).get("base_url", "")
+            if custom_url:
+                base_url = custom_url
+
+        if self.api_type == "openai" and self.provider_id == "deepseek":
+            llm_cfg = config.get("llm", {}) if config else {}
+            thinking = llm_cfg.get("thinking", "")
+            # DeepSeek V4 defaults to thinking mode. Disable it for normal Bot
+            # usage unless the user explicitly opts in, otherwise multi-turn
+            # tool calls require replaying provider-specific reasoning_content.
+            if thinking in ("", None):
+                thinking = "disabled"
+            self.thinking_mode = self._normalize_thinking(thinking, allow_auto=True)
+            if self.thinking_mode in ("enabled", "disabled"):
+                self.extra_body["thinking"] = {"type": self.thinking_mode}
+
+        if self.api_type == "anthropic":
+            import anthropic
+            self.client = anthropic.Anthropic(api_key=api_key)
+        else:
+            import openai
+            kwargs = {"api_key": api_key}
+            if base_url:
+                kwargs["base_url"] = base_url
+            self.client = openai.OpenAI(**kwargs)
+
+    @staticmethod
+    def _normalize_thinking(value, allow_auto=False):
+        """Return DeepSeek thinking toggle value: enabled/disabled/auto/None."""
+        if isinstance(value, bool):
+            return "enabled" if value else "disabled"
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if allow_auto and v in ("auto", "smart", "adaptive"):
+                return "auto"
+            if v in ("enabled", "enable", "on", "true", "yes", "1"):
+                return "enabled"
+            if v in ("disabled", "disable", "off", "false", "no", "0"):
+                return "disabled"
+        return None
+
+    def set_thinking_for_request(self, thinking_type):
+        """Temporarily override DeepSeek thinking for the next request."""
+        if self.api_type != "openai" or self.provider_id != "deepseek":
+            return
+        normalized = self._normalize_thinking(thinking_type)
+        if normalized:
+            self.extra_body["thinking"] = {"type": normalized}
+
+    @staticmethod
+    def extract_reasoning_content(raw_response):
+        """Read provider-specific reasoning_content without displaying it."""
+        try:
+            msg = raw_response.choices[0].message
+        except Exception:
+            return ""
+
+        reasoning = getattr(msg, "reasoning_content", None)
+        if reasoning:
+            return reasoning
+
+        extra = getattr(msg, "model_extra", None)
+        if isinstance(extra, dict):
+            return extra.get("reasoning_content", "") or ""
+
+        try:
+            data = msg.model_dump()
+            return data.get("reasoning_content", "") or ""
+        except Exception:
+            return ""
+
+    def chat(self, system_prompt, messages, tools):
+        """发送消息，返回 (text, tool_calls, raw_response)"""
+        if self.api_type == "anthropic":
+            return self._chat_anthropic(system_prompt, messages, tools)
+        else:
+            return self._chat_openai(system_prompt, messages, tools)
+
+    def _chat_anthropic(self, system_prompt, messages, tools):
+        clean = []
+        for m in messages:
+            role = m["role"]
+            if role in ("user", "assistant"):
+                content = m["content"]
+                # 已经是结构化 content（数组）就保留
+                if isinstance(content, list):
+                    clean.append({"role": role, "content": content})
+                else:
+                    clean.append({"role": role, "content": content})
+            elif role == "tool":
+                clean.append({
+                    "role": "user",
+                    "content": [{"type": "tool_result",
+                                 "tool_use_id": m["tool_use_id"],
+                                 "content": m["content"]}]
+                })
+
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=4096,
+            system=system_prompt,
+            tools=tools,
+            messages=clean
+        )
+
+        text = ""
+        tool_calls = []
+        for block in response.content:
+            if block.type == "text":
+                text += block.text
+            elif block.type == "tool_use":
+                tool_calls.append({
+                    "id": block.id,
+                    "name": block.name,
+                    "input": dict(block.input) if block.input else {}
+                })
+
+        return text, tool_calls, response
+
+    def _chat_openai(self, system_prompt, messages, tools):
+        # 构建 OpenAI 格式消息
+        openai_messages = [{"role": "system", "content": system_prompt}]
+        for m in messages:
+            role = m["role"]
+            if role == "tool":
+                openai_messages.append({
+                    "role": "tool",
+                    "tool_call_id": m.get("tool_use_id", ""),
+                    "content": m["content"]
+                })
+            elif role == "assistant" and isinstance(m.get("content"), list):
+                # 有 tool_calls 的 assistant 消息
+                tc_list = []
+                text_content = ""
+                reasoning_content = m.get("reasoning_content", "")
+                for block in m["content"]:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tc_list.append({
+                            "id": block["id"],
+                            "type": "function",
+                            "function": {"name": block["name"], "arguments": json.dumps(block.get("input", {}), ensure_ascii=False)}
+                        })
+                    elif isinstance(block, dict) and block.get("type") == "text":
+                        text_content += block.get("text", "")
+                    elif isinstance(block, dict) and block.get("type") == "reasoning":
+                        reasoning_content += block.get("text", "")
+                    elif isinstance(block, str):
+                        text_content += block
+                msg = {"role": "assistant", "content": text_content or None}
+                if reasoning_content:
+                    msg["reasoning_content"] = reasoning_content
+                if tc_list:
+                    msg["tool_calls"] = tc_list
+                openai_messages.append(msg)
+            else:
+                content = m.get("content", "")
+                if isinstance(content, list):
+                    # 提取 text
+                    texts = [b.get("text", "") if isinstance(b, dict) else str(b) for b in content]
+                    content = "".join(texts)
+                msg = {"role": role, "content": content}
+                if role == "assistant" and m.get("reasoning_content"):
+                    msg["reasoning_content"] = m["reasoning_content"]
+                openai_messages.append(msg)
+
+        kwargs = dict(
+            model=self.model,
+            messages=openai_messages,
+            tools=tools,
+            max_tokens=4096
+        )
+        if self.extra_body:
+            kwargs["extra_body"] = self.extra_body
+
+        response = self.client.chat.completions.create(**kwargs)
+
+        choice = response.choices[0]
+        msg = choice.message
+        text = msg.content or ""
+
+        tool_calls = []
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                try:
+                    inp = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    inp = {}
+                tool_calls.append({
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "input": inp
+                })
+
+        return text, tool_calls, response
+
+
+# ═══════════════════════════════════════════════════════
+# 会话
+# ═══════════════════════════════════════════════════════
+
+def load_session(session_id):
+    path = SESSION_DIR / f"{session_id}.json"
+    if path.exists():
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    return None
+
+
+def save_session(session_id, messages, meta):
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    data = {
+        "session_id": session_id,
+        "created_at": meta.get("created_at", datetime.now().isoformat()),
+        "updated_at": datetime.now().isoformat(),
+        "provider": meta.get("provider", ""),
+        "model": meta.get("model", ""),
+        "book": meta.get("book", ""),
+        "chapter": meta.get("chapter", ""),
+        "user_id": meta.get("user_id", "default"),
+        "messages": messages
+    }
+    with open(SESSION_DIR / f"{session_id}.json", 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def find_session_for_user(user_id):
+    """查找用户最近的会话"""
+    if not SESSION_DIR.exists():
+        return None
+    best = None
+    best_time = ""
+    for f in SESSION_DIR.glob("*.json"):
+        try:
+            with open(f, encoding='utf-8') as fh:
+                d = json.load(fh)
+            if d.get("user_id", "default") == user_id:
+                updated = d.get("updated_at", "")
+                if updated > best_time:
+                    best_time = updated
+                    best = d.get("session_id")
+        except Exception:
+            pass
+    return best
+
+
+def list_sessions():
+    if not SESSION_DIR.exists():
+        return []
+    sessions = []
+    for f in sorted(SESSION_DIR.glob("*.json"), key=os.path.getmtime, reverse=True):
+        try:
+            with open(f, encoding='utf-8') as fh:
+                d = json.load(fh)
+            sessions.append((
+                d.get("session_id", f.stem),
+                d.get("book", "?"),
+                d.get("provider", ""),
+                d.get("model", ""),
+                d.get("updated_at", "")[:16],
+                len(d.get("messages", []))
+            ))
+        except Exception:
+            pass
+    return sessions
+
+
+def read_current_stage(config, user_id="default"):
+    state_dir = config.get("paths", {}).get("state_dir", str(Path(__file__).parent / "state"))
+    state_path = Path(state_dir).expanduser()
+    if not state_path.is_absolute():
+        state_path = Path(__file__).parent / state_path
+    current = state_path / user_id / "current.json"
+    if not current.exists() and user_id != "default":
+        current = state_path / "default" / "current.json"
+    if not current.exists():
+        return ""
+    try:
+        with open(current, encoding="utf-8-sig") as f:
+            data = json.load(f)
+        return data.get("current", {}).get("stage", "") or ""
+    except Exception:
+        return ""
+
+
+# ═══════════════════════════════════════════════════════
+# Agent 主循环
+# ═══════════════════════════════════════════════════════
+
+class DeepReadAgent:
+    def __init__(self, session_id=None, provider=None, model=None, user_id="default"):
+        self.config = load_config()
+        pid, pcfg = detect_provider(self.config, provider)
+        model = get_model(pcfg, self.config, model)
+        api_key = get_api_key(pcfg, self.config)
+
+        if not api_key:
+            print(f"错误: 未设置 {pcfg['key_env']}")
+            sys.exit(1)
+
+        self.llm = LLMProvider(pid, pcfg, api_key, model, self.config)
+        print(f"后端: {self.llm.name} | 模型: {model}")
+
+        self.system_prompt = load_system_prompt(self.config)
+        self.tools_anthropic = TOOLS_ANTHROPIC
+        self.tools_openai = to_openai_tools()
+        self.use_tools = self.tools_anthropic if self.llm.api_type == "anthropic" else self.tools_openai
+
+        self.user_id = user_id
+        self.session_id = session_id or datetime.now().strftime("%Y%m%dT%H%M%S")
+        self.messages = []
+        self.meta = {"book": "", "chapter": "", "provider": pid, "model": model, "user_id": user_id}
+        self._last_user_input = ""
+        self._thinking_override = None
+
+        if not session_id:
+            log_session_start(self.session_id, pid, model, user_id)
+
+        if session_id:
+            saved = load_session(session_id)
+            if saved:
+                self.messages = saved.get("messages", [])
+                self.meta["book"] = saved.get("book", "")
+                self.meta["chapter"] = saved.get("chapter", "")
+                self.meta["created_at"] = saved.get("created_at", "")
+                print(f"恢复 {session_id}: 《{self.meta['book']}》({len(self.messages)} 轮)")
+
+    def _update_meta(self, text, tool_calls, tool_results):
+        """从工具调用结果回填 book/chapter meta"""
+        if self.meta.get("book") and self.meta.get("chapter"):
+            return  # 已有，不覆盖
+
+        for tid, tname, tresult in tool_results:
+            if tname == "read_state":
+                try:
+                    # 解析人类可读输出
+                    for line in tresult.split('\n'):
+                        line = line.strip()
+                        if line.startswith("书名:") and not self.meta.get("book"):
+                            book = line.split(":", 1)[1].strip()
+                            if book and book != "(未开始)" and book != "-":
+                                self.meta["book"] = book
+                        if line.startswith("章节:") and not self.meta.get("chapter"):
+                            ch = line.split(":", 1)[1].strip()
+                            if ch and ch != "-":
+                                self.meta["chapter"] = ch
+                except Exception:
+                    pass
+            elif tname == "extract_epub":
+                try:
+                    data = json.loads(tresult)
+                    bk = data.get("book", {})
+                    ch = data.get("chapter", {})
+                    if bk.get("title") and not self.meta.get("book"):
+                        # 清理书名中的副标题
+                        title = bk["title"].split("(")[0].split("（")[0]
+                        self.meta["book"] = title
+                    if ch.get("index") is not None and not self.meta.get("chapter"):
+                        self.meta["chapter"] = str(ch["index"])
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+    def _save_recovery(self):
+        """保存最后用户输入，用于崩溃恢复"""
+        try:
+            recovery = SESSION_DIR / f"{self.session_id}.recovery"
+            with open(recovery, 'w', encoding='utf-8') as f:
+                f.write(self._last_user_input)
+        except Exception:
+            pass
+
+    def process_message(self, user_input, silent=True):
+        """可编程接口：处理一条消息，返回 (response_text, tool_calls_info)
+        供飞书/微信/Web 等外部入口调用。
+        """
+        user_input, self._thinking_override = split_thinking_directive(user_input)
+        self._last_user_input = user_input
+        self.messages.append({"role": "user", "content": user_input})
+        return self._call_api_internal(silent=silent)
+
+    def _select_thinking_for_request(self):
+        if not hasattr(self.llm, "set_thinking_for_request"):
+            return
+        mode = getattr(self.llm, "thinking_mode", None)
+        if not mode:
+            return
+
+        thinking = mode
+        if self._thinking_override:
+            thinking = self._thinking_override
+        elif mode == "auto":
+            stage = read_current_stage(self.config, self.user_id)
+            thinking = "enabled" if should_enable_auto_thinking(self._last_user_input, stage) else "disabled"
+
+        self.llm.set_thinking_for_request(thinking)
+
+    def _call_api_internal(self, silent=True):
+        """内部 API 调用，返回 (text, tool_results)"""
+        last_tool_results = []
+        all_tool_results = []
+
+        while True:
+            # 保存最后一条用户输入用于失败恢复
+            if self._last_user_input:
+                self._save_recovery()
+
+            t0 = time.time()
+            attempt = 0
+            max_retries = 2
+            raw = None
+            text = ""
+            tool_calls = []
+            self._select_thinking_for_request()
+
+            while attempt < max_retries:
+                try:
+                    text, tool_calls, raw = self.llm.chat(
+                        self.system_prompt, self.messages,
+                        self.use_tools
+                    )
+                    break
+                except Exception as e:
+                    attempt += 1
+                    if attempt >= max_retries:
+                        elapsed = int((time.time() - t0) * 1000)
+                        log_api_call(self.session_id, self.llm.model,
+                                     len(self.messages), elapsed, error=e)
+                        log_error(self.session_id, "api", e)
+                        error_msg = f"API 错误（重试{max_retries}次后）: {e}"
+                        if not silent:
+                            print(f"\n{error_msg}")
+                        self._thinking_override = None
+                        return error_msg, []
+                    time.sleep(1)
+
+            elapsed = int((time.time() - t0) * 1000)
+            log_api_call(self.session_id, self.llm.model, len(self.messages), elapsed)
+
+            if not silent and text:
+                print(f"\n{text}\n")
+
+            if tool_calls:
+                last_tool_results = []
+                tool_summary = []
+                for tc in tool_calls:
+                    tname = tc["name"]
+                    tinp = tc["input"]
+                    t0 = time.time()
+                    result = execute_tool(tname, tinp, self.user_id)
+                    elapsed = int((time.time() - t0) * 1000)
+                    log_tool_call(self.session_id, tname, tinp, result, elapsed)
+                    last_tool_results.append((tc["id"], tname, result))
+                    all_tool_results.append((tc["id"], tname, result))
+                    tool_summary.append(f"{tname}: {result[:100]}")
+
+                if self.llm.api_type == "anthropic":
+                    assistant_content = []
+                    for block in raw.content:
+                        if block.type == "text":
+                            assistant_content.append({"type": "text", "text": block.text})
+                        elif block.type == "tool_use":
+                            assistant_content.append({
+                                "type": "tool_use", "id": block.id,
+                                "name": block.name, "input": block.input
+                            })
+                    self.messages.append({"role": "assistant", "content": assistant_content})
+                    for tid, tname, tresult in last_tool_results:
+                        self.messages.append({
+                            "role": "tool", "tool_use_id": tid,
+                            "name": tname, "content": tresult
+                        })
+                else:
+                    reasoning_content = self.llm.extract_reasoning_content(raw)
+                    self.messages.append({
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": text}] + [
+                            {"type": "tool_use", "id": tc["id"],
+                             "name": tc["name"], "input": tc["input"]}
+                            for tc in tool_calls
+                        ],
+                        "reasoning_content": reasoning_content
+                    })
+                    for tid, tname, tresult in last_tool_results:
+                        self.messages.append({
+                            "role": "tool", "tool_use_id": tid,
+                            "name": tname, "content": tresult
+                        })
+                continue  # 继续工具调用循环
+            else:
+                msg = {"role": "assistant", "content": text}
+                if self.llm.api_type == "openai":
+                    reasoning_content = self.llm.extract_reasoning_content(raw)
+                    if reasoning_content:
+                        msg["reasoning_content"] = reasoning_content
+                self.messages.append(msg)
+                self._update_meta(text, [], all_tool_results)
+                try:
+                    save_session(self.session_id, self.messages, self.meta)
+                except Exception:
+                    pass
+                self._thinking_override = None
+                return text, all_tool_results
+
+    def run(self):
+        print(f"会话: {self.session_id}")
+        print("输入 /help 查看命令, /exit 退出")
+        print()
+
+        while True:
+            try:
+                ui = input("DeepRead > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                log_session_end(self.session_id, "interrupt")
+                print(f"\n会话已保存: {self.session_id}")
+                break
+
+            if not ui:
+                continue
+            if ui == "/exit":
+                log_session_end(self.session_id, "exit")
+                print(f"会话已保存: {self.session_id}")
+                break
+
+            ui, self._thinking_override = split_thinking_directive(ui)
+            self._last_user_input = ui
+            if ui == "/help":
+                print("命令: /exit 退出 | /state 查看状态 | /tools 列出工具 | /session 会话信息")
+                print("精读: 读《书名》第N章 | 继续: 进入下一阶段")
+                self._thinking_override = None
+                continue
+            if ui == "/state":
+                print(execute_tool("read_state", {}, self.user_id))
+                self._thinking_override = None
+                continue
+            if ui == "/tools":
+                for t in TOOLS_ANTHROPIC:
+                    print(f"  {t['name']}: {t['description'][:80]}")
+                self._thinking_override = None
+                continue
+            if ui == "/session":
+                print(f"ID: {self.session_id} | {self.llm.name}/{self.llm.model}")
+                print(f"书: {self.meta.get('book', '-')} | 消息: {len(self.messages)}")
+                self._thinking_override = None
+                continue
+
+            self.messages.append({"role": "user", "content": ui})
+            self._call_api()
+
+    def _call_api(self):
+        """CLI 模式（带工具调用打印）"""
+        self._call_api_internal(silent=False)
+
+
+# ═══════════════════════════════════════════════════════
+# CLI
+# ═══════════════════════════════════════════════════════
+
+def main():
+    parser = argparse.ArgumentParser(description="DeepRead Agent")
+    parser.add_argument("--resume", help="恢复会话 ID")
+    parser.add_argument("--list-sessions", action="store_true")
+    parser.add_argument("--provider", help="deepseek / anthropic / openai")
+    parser.add_argument("--model", help="模型 ID")
+    args = parser.parse_args()
+
+    if args.list_sessions:
+        sessions = list_sessions()
+        if not sessions:
+            print("没有保存的会话")
+            return
+        print(f"{'会话ID':<18} {'书籍':<16} {'后端':<12} {'更新时间':<18} {'消息'}")
+        print("-" * 80)
+        for sid, book, prov, model, updated, count in sessions[:20]:
+            print(f"{sid:<18} {book:<16} {prov}/{model:<12} {updated:<18} {count}")
+        return
+
+    agent = DeepReadAgent(
+        session_id=args.resume,
+        provider=args.provider,
+        model=args.model
+    )
+    agent.run()
+
+
+if __name__ == "__main__":
+    main()
