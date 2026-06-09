@@ -45,8 +45,29 @@ def get_history_dir(state_dir):
 def read_state(state_dir):
     path = get_current_path(state_dir)
     if os.path.exists(path):
-        with open(path, encoding='utf-8-sig') as f:
-            return json.load(f)
+        try:
+            with open(path, encoding='utf-8-sig') as f:
+                state = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"警告: 状态文件已损坏，无法解析: {e}", file=sys.stderr)
+            # 归档损坏文件
+            corrupted_path = path + ".corrupted"
+            try:
+                os.rename(path, corrupted_path)
+            except OSError:
+                pass
+            return default_state()
+        # Schema 迁移：用 default_state() 的 keys 补全缺失字段
+        default = default_state()
+        for key in default:
+            if key not in state:
+                state[key] = default[key]
+        # 对 nested dict 也做补全（如 current）
+        if isinstance(state.get("current"), dict) and isinstance(default.get("current"), dict):
+            for key in default["current"]:
+                if key not in state["current"]:
+                    state["current"][key] = default["current"][key]
+        return state
     return default_state()
 
 
@@ -72,8 +93,10 @@ def default_state():
 def write_state(state_dir, state):
     os.makedirs(state_dir, exist_ok=True)
     path = get_current_path(state_dir)
-    with open(path, 'w', encoding='utf-8') as f:
+    tmp_path = path + ".tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
 
 
 def archive_state(state_dir, state):

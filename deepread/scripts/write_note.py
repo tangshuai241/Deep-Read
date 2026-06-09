@@ -36,7 +36,7 @@ def safe_write(filepath, content, check_mtime=None):
     if os.path.exists(filepath):
         if check_mtime is not None:
             current_mtime = os.path.getmtime(filepath)
-            if abs(current_mtime - check_mtime) > 0.5:
+            if abs(current_mtime - check_mtime) > 3.0:
                 return {"ok": False, "error_code": "CONFLICT",
                         "message": "文件已被外部修改（可能是同步盘），拒绝覆盖",
                         "hint": "重新读取文件后再试，或手动解决冲突"}
@@ -532,27 +532,34 @@ def compile_note_content(content, suggestions=None):
 
 def format_frontmatter(meta):
     """生成 YAML frontmatter"""
+    def _yq(v):
+        """YAML 值转义：含 : 或 # 时用双引号包裹"""
+        s = str(v)
+        if ':' in s or '#' in s:
+            return f'"{s}"'
+        return s
+
     lines = ["---"]
     if meta.get("book"):
-        lines.append(f'书名: 《{meta["book"]}》')
+        lines.append(f'书名: 《{_yq(meta["book"])}》')
     if meta.get("author"):
-        lines.append(f"作者: {meta['author']}")
+        lines.append(f"作者: {_yq(meta['author'])}")
     if meta.get("category"):
         cats = meta["category"]
         if isinstance(cats, str):
             cats = [cats]
         lines.append("学科:")
         for c in cats:
-            lines.append(f"  - {c}")
+            lines.append(f"  - {_yq(c)}")
     if meta.get("tags"):
         tags = meta["tags"]
         if isinstance(tags, str):
             tags = [t.strip() for t in tags.split(",")]
         lines.append("tags:")
         for t in tags:
-            lines.append(f"  - {t}")
+            lines.append(f"  - {_yq(t)}")
     if meta.get("chapter"):
-        lines.append(f"章节: {meta['chapter']}")
+        lines.append(f"章节: {_yq(meta['chapter'])}")
     lines.append("---")
     lines.append("")
     return "\n".join(lines)
@@ -758,8 +765,10 @@ def finalize_note(args):
             content = content.rstrip() + f"\n\n## ❓ 待探索\n{explore}\n"
 
     content = normalize_note_content(content)
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(content)
+    result = safe_write(filepath, content)
+    if not result["ok"]:
+        print(json.dumps(result, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
 
     print(json.dumps({"status": "finalized", "path": filepath}, ensure_ascii=False))
 

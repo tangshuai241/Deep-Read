@@ -2,8 +2,9 @@
 """Book Downloader — Gutenberg + LibGen unified CLI + email delivery.
 2026-06-07: Added LibGen session download, email with correct EPUB MIME, unified verify.
 """
-import json, os, sys, re, zipfile, argparse, smtplib
+import json, os, sys, re, time, socket, zipfile, argparse, smtplib
 from urllib.request import urlopen, Request
+from urllib.error import URLError, HTTPError
 from urllib.parse import quote, urlencode
 from pathlib import Path
 from email.mime.multipart import MIMEMultipart
@@ -76,9 +77,18 @@ def _config():
 
 # ── HTTP helpers ─────────────────────────────────────
 def _http_get(url, timeout=15):
-    req = Request(url, headers={"User-Agent": "book-downloader/2.0"})
-    with urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    """HTTP GET with retry (2 retries, exponential backoff: 1s → 2s)."""
+    last_error = None
+    for attempt in range(3):
+        try:
+            req = Request(url, headers={"User-Agent": "book-downloader/2.0"})
+            with urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except (URLError, HTTPError, socket.timeout) as e:
+            last_error = e
+            if attempt < 2:
+                time.sleep(1 * (2 ** attempt))  # 1s, 2s
+    raise last_error
 
 def _requests_session():
     """Lazy-import requests (only needed for libgen)."""
@@ -142,7 +152,10 @@ def verify_epub(filepath):
 def search_gutenberg(query, limit=10):
     params = urlencode({"query": query, "format": "json"})
     url = f"{GUTENBERG_SEARCH}?{params}"
-    data = json.loads(_http_get(url))
+    try:
+        data = json.loads(_http_get(url))
+    except Exception:
+        return []
     if not isinstance(data, list) or len(data) < 4:
         return []
 
@@ -164,7 +177,11 @@ def download_gutenberg(ebook_id, outdir=None, show_progress=True):
     os.makedirs(outdir, exist_ok=True)
     filepath = os.path.join(outdir, f"{ebook_id}.epub")
     if show_progress: print(f"  Downloading: {url}")
-    data = _http_get(url, timeout=60)
+    try:
+        data = _http_get(url, timeout=60)
+    except Exception as e:
+        if show_progress: print(f"  ❌ Download failed: {e}")
+        return None, 0, False
     with open(filepath, "wb") as f: f.write(data)
     valid = _validate_epub(filepath)
     if show_progress: print(f"  Saved: {filepath} ({len(data)/1024:.0f}KB) {'✅' if valid else '⚠️'}")
@@ -174,7 +191,10 @@ def download_gutenberg(ebook_id, outdir=None, show_progress=True):
 def search_libgen(query, limit=10):
     """Search libgen.li. Returns [{title, author, publisher, year, ext, size, md5, source}]."""
     s = _requests_session()
-    resp = s.get(LIBGEN_SEARCH, params={"req": query, "res": min(limit, 25), "view": "detailed"}, timeout=15)
+    try:
+        resp = s.get(LIBGEN_SEARCH, params={"req": query, "res": min(limit, 25), "view": "detailed"}, timeout=15)
+    except Exception:
+        return []
     if resp.status_code != 200:
         return []
 
@@ -214,7 +234,11 @@ def download_libgen(md5, outdir=None, show_progress=True):
 
     # Step 1: Get ads.php to obtain session and download key
     if show_progress: print(f"  Fetching libgen.li session (md5={md5[:8]}...)")
-    r1 = s.get(f"{LIBGEN_ADS}?md5={md5}", timeout=15)
+    try:
+        r1 = s.get(f"{LIBGEN_ADS}?md5={md5}", timeout=15)
+    except Exception as e:
+        if show_progress: print(f"  ❌ LibGen session fetch failed: {e}")
+        return None, 0, False
     key_match = re.search(r'get\.php\?md5=' + md5 + r'&key=([A-Z0-9]+)', r1.text)
     if not key_match:
         return None, 0, False
@@ -223,7 +247,11 @@ def download_libgen(md5, outdir=None, show_progress=True):
     # Step 2: Download actual file
     get_url = f"https://libgen.li/get.php?md5={md5}&key={key}"
     if show_progress: print(f"  Downloading: libgen.li/get.php?...")
-    r2 = s.get(get_url, timeout=60)
+    try:
+        r2 = s.get(get_url, timeout=60)
+    except Exception as e:
+        if show_progress: print(f"  ❌ LibGen download failed: {e}")
+        return None, 0, False
 
     if 'text/html' in r2.headers.get('Content-Type', ''):
         if show_progress: print(f"  ❌ libgen returned HTML (likely anti-bot), size={len(r2.content)}")
@@ -254,8 +282,10 @@ def download_libgen(md5, outdir=None, show_progress=True):
     return filepath, len(r2.content), valid
 
 # ── Email ────────────────────────────────────────────
+_SENTINEL = object()
+
 def send_epub_email(filepath, recipient, smtp_password, sender=None,
-                    subject=None, body_extra="", smtp_host=None, smtp_port=None, smtp_ssl=True):
+                    subject=None, body_extra="", smtp_host=None, smtp_port=None, smtp_ssl=_SENTINEL):
     """Send EPUB as email attachment with correct MIME type (application/epub+zip)."""
     cfg = _config()
     if not smtp_password:
@@ -268,6 +298,7 @@ def send_epub_email(filepath, recipient, smtp_password, sender=None,
         smtp_host = (cfg.get("email", {}).get("smtp_host", "smtp.qq.com") if cfg else "smtp.qq.com")
     if not smtp_port:
         smtp_port = (cfg.get("email", {}).get("smtp_port", 465) if cfg else 465)
+    if smtp_ssl is _SENTINEL:
         smtp_ssl = (cfg.get("email", {}).get("smtp_ssl", True) if cfg else True)
 
     if not smtp_password:
@@ -298,7 +329,7 @@ def send_epub_email(filepath, recipient, smtp_password, sender=None,
         # RFC 2231 encoding for Chinese filenames — prevents .bin rename
         safe_name = f"{book_name}.epub"
         part.add_header("Content-Disposition", "attachment", filename=("utf-8", "", safe_name))
-        part.add_header("Content-Type", "application/epub+zip", name=("utf-8", "", safe_name))
+        part.replace_header("Content-Type", "application/epub+zip")
         msg.attach(part)
 
     try:

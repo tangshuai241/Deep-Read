@@ -61,9 +61,47 @@ def resolve_book_path(book_arg, books_dir):
 
 
 def clean_html(html_content):
+    """清洗 HTML，保留语义结构：标题层级、加粗、斜体、列表、表格"""
     soup = BeautifulSoup(html_content, 'lxml')
     for tag in soup(['script', 'style']):
         tag.decompose()
+
+    # 表格：保留结构，转换为竖线分隔的文本
+    for tag in soup.find_all('table'):
+        rows = []
+        for tr in tag.find_all('tr'):
+            cells = [td.get_text(' ', strip=True) for td in tr.find_all(['td', 'th'])]
+            if cells:
+                rows.append(' | '.join(cells))
+        if rows:
+            tag.replace_with('\n' + '\n'.join(rows) + '\n')
+
+    # 标题：用 # 号标记层级
+    for tag in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+        level = int(tag.name[1])
+        prefix = '#' * level
+        tag.insert_before(f'\n{prefix} ')
+        tag.insert_after('\n')
+
+    # 加粗：保留为 **text**
+    for tag in soup.find_all(['b', 'strong']):
+        tag.insert_before('**')
+        tag.insert_after('**')
+
+    # 斜体：保留为 *text*
+    for tag in soup.find_all(['em', 'i']):
+        tag.insert_before('*')
+        tag.insert_after('*')
+
+    # 列表项：用 • 标记
+    for tag in soup.find_all('li'):
+        tag.insert_before('• ')
+        tag.insert_after('\n')
+
+    # 换行
+    for tag in soup.find_all('br'):
+        tag.replace_with('\n')
+
     text = soup.get_text()
     text = re.sub(r'\n\s*\n', '\n\n', text)
     text = re.sub(r'[ \t]+', ' ', text)
@@ -264,7 +302,34 @@ def chinese_num_to_int(text):
     return total if total > 0 else 0
 
 
+def _parse_western_chapter_num(text):
+    """解析西方章节编号，支持罗马数字和阿拉伯数字"""
+    text = text.strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    # 罗马数字解析
+    roman_map = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+    result = 0
+    prev_value = 0
+    for ch in reversed(text.upper()):
+        if ch not in roman_map:
+            return None
+        value = roman_map[ch]
+        if value < prev_value:
+            result -= value
+        else:
+            result += value
+        prev_value = value
+    return result if result > 0 else None
+
+
 CHAPTER_PATTERN = re.compile(r'第([0-9零〇一二两三四五六七八九十百千]+)章')
+ENGLISH_CHAPTER_PATTERNS = re.compile(
+    r'(Chapter|Chapitre|Kapitel|Capítulo)\s+([IVXLCDM0-9]+)',
+    re.IGNORECASE
+)
 PART_PATTERN = re.compile(r'第[一二三四五六七八九十百]+部分')
 NCX_ENTRY_PATTERN = re.compile(
     r'<navPoint[^>]*>.*?<navLabel>\s*<text>(.*?)</text>\s*</navLabel>.*?<content\s+src="([^"]*)"',
@@ -275,9 +340,17 @@ NCX_ENTRY_PATTERN = re.compile(
 def _entry_from_title_file(title, fname, fallback_num=None):
     title = re.sub(r"\s+", " ", BeautifulSoup(title, "lxml").get_text()).strip()
     cm = CHAPTER_PATTERN.match(title)
+    em = ENGLISH_CHAPTER_PATTERNS.match(title)
     pm = PART_PATTERN.match(title)
-    chapter_num = chinese_num_to_int(cm.group(1)) if cm else fallback_num
-    is_chapter = bool(cm) or fallback_num is not None
+    if em:
+        chapter_num = _parse_western_chapter_num(em.group(2))
+        is_chapter = True
+    elif cm:
+        chapter_num = chinese_num_to_int(cm.group(1))
+        is_chapter = True
+    else:
+        chapter_num = fallback_num
+        is_chapter = fallback_num is not None
     return {
         "title": title,
         "file": fname,
@@ -593,10 +666,30 @@ def find_chapter(ncx, chapter_ref):
 
 
 def extract_chapter_text(book, entry, ncx):
-    """提取章节全文，按小节拆分"""
+    """提取章节全文，按小节拆分。长章节自动分片"""
     full_text = get_content_for_file(book, entry["file"])
     if not full_text:
         return None
+
+    # 长章节自动分片（>50000 字符，约 8000 英文词 / 5000 中文词）
+    MAX_CHUNK_SIZE = 50000
+    if len(full_text) > MAX_CHUNK_SIZE:
+        total_chunks = (len(full_text) + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
+        chunks = []
+        for i in range(0, len(full_text), MAX_CHUNK_SIZE):
+            chunk_text = full_text[i:i + MAX_CHUNK_SIZE]
+            chunk_num = i // MAX_CHUNK_SIZE + 1
+            chunks.append({
+                "title": f"{entry['title']}(分片{chunk_num}/{total_chunks})",
+                "text": chunk_text,
+                "word_count": len(chunk_text)
+            })
+        return {
+            "title": entry["title"],
+            "word_count": len(full_text),
+            "file": entry["file"],
+            "sections": chunks
+        }
 
     sections = []
     section_titles = get_chapter_sections(ncx, entry["chapter_num"])
