@@ -13,8 +13,8 @@
 ### 一键安装
 
 ```bash
-git clone https://github.com/your-username/book-toolchain.git
-cd book-toolchain
+git clone https://github.com/tangshuai241/Deep-Read.git
+cd Deep-Read
 python install.py
 ```
 
@@ -25,7 +25,7 @@ python install.py
 
 ### 配置
 
-安装后编辑 `config.yaml`，必填：
+安装后编辑 `config.yaml`（本地配置文件，**不要提交到 git**，包含 API Key / 路径 / 邮箱等敏感信息），必填：
 
 ```yaml
 llm:
@@ -38,6 +38,11 @@ paths:
   books_dir: "~/TaskOS/books"           # EPUB + 4D 拆解 JSON 统一存储
   notes_dir: "~/Documents/reading-notes" # 阅读笔记输出
 ```
+
+| 配置文件 | 用途 | 是否提交 |
+|----------|------|----------|
+| `config.yaml`（根目录） | API Key、路径、邮箱等本地机密 | ❌ **不要提交** |
+| `deepread/config.yaml` | DeepRead 偏好设置覆盖 | ✅ 提交到 git |
 
 验证：`python doctor.py`
 
@@ -69,6 +74,12 @@ python book_downloader/book_downloader.py download <id>
 **CLI：** `python book_downloader/book_downloader.py get "Thinking, Fast and Slow"`（仅下载）
 
 输出：`{BOOKS_DIR}/{book}/analysis/` 下 6 份 JSON + 全文。
+
+（可选）验证拆解产物的完整性和格式（Phase 2）：
+```bash
+python 4d_pipeline/validate_analysis.py {BOOKS_DIR}/{book}/analysis --write-manifest
+```
+此命令生成 `analysis_manifest.json`，供 DeepRead 预读分析时参考。
 
 ### 3. 开始深度阅读
 
@@ -136,7 +147,7 @@ book-toolchain/
 │   └── CLAUDE.md                  ← Claude Code 指令
 ├── deepread/
 │   ├── agent.py                   ← 独立 Agent 运行时
-│   ├── config.yaml                ← DeepRead 本地配置（提交到 git）
+│   ├── config.yaml                ← DeepRead 偏好配置（提交到 git）
 │   ├── SKILL.md                   ← Hermes skill
 │   ├── CLAUDE.md                  ← Claude Code 指令
 │   ├── reading-notes.example.md   ← 阅读进度模板

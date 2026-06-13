@@ -6,3 +6,11 @@ venv/
 *.egg-info/
 dist/
 .env
+config.yaml
+
+# OpenCode deepwork progress (local only)
+.slim/deepwork/
+
+# Runtime / session artifacts
+deepread/state/
+deepread/logs/

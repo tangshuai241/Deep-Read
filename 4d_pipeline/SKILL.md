@@ -228,3 +228,15 @@ delegate_task(goal="汇总验证四维产物...", context=all_four_outputs)
 书籍识别名从 EPUB 文件名去 .epub 得到，用下划线连字符替代空格/特殊字符。
 
 > **配置**：`config.yaml → paths.books_dir`（默认 `~/TaskOS/books`）。无配置时可用环境变量 `BOOK_TOOLCHAIN_BOOKS_DIR`。
+
+---
+
+## 输出验证（Phase 2）
+
+拆解完成后，建议运行产物验证器检查 6 份 JSON 的完整性和格式：
+
+```bash
+python 4d_pipeline/validate_analysis.py {BOOKS_DIR}/{book}/analysis --write-manifest
+```
+
+验证器在 `analysis/` 目录生成 `analysis_manifest.json`，记录每份文件的存在性、JSON 可解析性和大小。`preload_analysis.py` 会自动读取此清单并在 JSON 输出中暴露 `validated` / `manifest_status` 等字段。若无此清单，预读分析仍正常工作（`manifest_status="missing"`，仅附带建议提示）。

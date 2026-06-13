@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 
+CONTRACT_SCHEMA_VERSION = "1.0"
 POINT_GROUPS = ("A_core", "B_important", "C_evidence", "D_application")
 VALID_STATUSES = {"pending", "covered", "unclear", "passed"}
 REQUIRED_STAGE_EVENTS = {
@@ -97,7 +98,7 @@ def default_contract(book="", chapter="", section="", goal="理解",
                      profile="personal", book_type="", reading_mode="concept_deep_read",
                      mode_reason=""):
     return {
-        "version": "1.1",
+        "schema_version": CONTRACT_SCHEMA_VERSION,
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "profile": profile,
@@ -136,7 +137,28 @@ def load_contract(user="default"):
     if not path.exists():
         return default_contract()
     with open(path, encoding="utf-8-sig") as f:
-        return json.load(f)
+        contract = json.load(f)
+
+    # Backfill schema_version (migrate from old 'version' field if present)
+    if "schema_version" not in contract:
+        contract["schema_version"] = contract.get("version", CONTRACT_SCHEMA_VERSION)
+
+    # Backfill missing top-level keys from defaults (preserves existing data)
+    defaults = default_contract()
+    for key, default_val in defaults.items():
+        if key not in contract:
+            contract[key] = default_val
+
+    # Deep-merge nested dicts: add missing sub-keys without overwriting existing values
+    nested_keys = ["scope", "knowledge_map", "stage_events", "note_deposits"]
+    for key in nested_keys:
+        if key in defaults and isinstance(defaults[key], dict):
+            contract_nested = contract.setdefault(key, {})
+            for sub_key, sub_val in defaults[key].items():
+                if sub_key not in contract_nested:
+                    contract_nested[sub_key] = sub_val
+
+    return contract
 
 
 def save_contract(contract, user="default"):

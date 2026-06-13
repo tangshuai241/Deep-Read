@@ -136,7 +136,13 @@ Task goal: "汇总验证四维拆解产物"
 
 ## 验证
 
-完成后，用 preload_analysis.py 检查：
+全部六份 JSON 生成后，先运行产物验证器（Phase 2）：
+```bash
+python 4d_pipeline/validate_analysis.py {BOOKS_DIR}/{book}/analysis --write-manifest
+```
+验证器检查每份 JSON 文件的完整性和可解析性，生成 `analysis_manifest.json`。
+
+然后用 preload_analysis.py 检查预读摘要：
 ```bash
 python deepread/scripts/preload_analysis.py --book "{book}" --mode compact
 ```

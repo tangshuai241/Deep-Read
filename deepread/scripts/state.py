@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from datetime import datetime, date
 
+STATE_SCHEMA_VERSION = "1.0"
+
 
 def load_config():
     config_path = Path(__file__).parent.parent / "config.yaml"
@@ -57,22 +59,31 @@ def read_state(state_dir):
             except OSError:
                 pass
             return default_state()
-        # Schema 迁移：用 default_state() 的 keys 补全缺失字段
+        # Schema 迁移：backfill missing schema_version / known keys；保留未知字段
         default = default_state()
+
+        # Ensure schema_version is present and current
+        if "schema_version" not in state:
+            state["schema_version"] = STATE_SCHEMA_VERSION
+
+        # Backfill any missing top-level known keys
         for key in default:
             if key not in state:
                 state[key] = default[key]
-        # 对 nested dict 也做补全（如 current）
+
+        # Backfill nested current dict
         if isinstance(state.get("current"), dict) and isinstance(default.get("current"), dict):
             for key in default["current"]:
                 if key not in state["current"]:
                     state["current"][key] = default["current"][key]
+
         return state
     return default_state()
 
 
 def default_state():
     return {
+        "schema_version": STATE_SCHEMA_VERSION,
         "current": {
             "book": None,
             "chapter": None,

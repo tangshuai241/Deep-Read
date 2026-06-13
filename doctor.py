@@ -12,8 +12,32 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 
+def _ok():
+    """Return encoding-safe OK marker."""
+    try:
+        "✅".encode(sys.stdout.encoding)
+        return "✅"
+    except (UnicodeEncodeError, UnicodeError):
+        return "[OK]"
+
+def _fail():
+    """Return encoding-safe FAIL marker."""
+    try:
+        "❌".encode(sys.stdout.encoding)
+        return "❌"
+    except (UnicodeEncodeError, UnicodeError):
+        return "[FAIL]"
+
+def _warn():
+    """Return encoding-safe WARN marker."""
+    try:
+        "⚠️".encode(sys.stdout.encoding)
+        return "⚠️"
+    except (UnicodeEncodeError, UnicodeError):
+        return "[WARN]"
+
 def check(msg, ok):
-    symbol = "✅" if ok else "❌"
+    symbol = _ok() if ok else _fail()
     print(f"  {symbol} {msg}")
     return ok
 
@@ -78,7 +102,7 @@ def main():
 
             api_key = cfg.get("llm", {}).get("api_key", "")
             if not api_key:
-                check("llm.api_key（⚠️ 未配置——这是正常的，请先获取 DeepSeek API Key）", True)
+                check(f"llm.api_key（{_warn()} 未配置——这是正常的，请先获取 DeepSeek API Key）", True)
                 print("       获取地址：https://platform.deepseek.com")
             else:
                 check("llm.api_key（已配置）", True)
@@ -143,9 +167,9 @@ def main():
     print()
     print("=" * 50)
     if all_ok:
-        print("  ✅ 全部检查通过！可以开始使用了。")
+        print(f"  {_ok()} 全部检查通过！可以开始使用了。")
     else:
-        print("  ⚠️  有检查未通过，请根据上述提示修复。")
+        print(f"  {_warn()} 有检查未通过，请根据上述提示修复。")
     print("=" * 50)
 
     return 0 if all_ok else 1

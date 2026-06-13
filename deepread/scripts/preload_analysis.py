@@ -28,6 +28,10 @@ ANALYSIS_SUBDIR = "analysis"
 # 可信度阈值：低于此值不自动注入预读
 CREDIBILITY_THRESHOLD = 70
 
+# Phase 2D: Validation manifest constants (4d_pipeline/validate_analysis.py)
+MANIFEST_FILENAME = "analysis_manifest.json"
+EXPECTED_MANIFEST_SCHEMA = "1.0"
+
 
 def find_analysis_dir(books_dir, book_name):
     """在 books_dir 下模糊匹配书名，返回 analysis/ 目录路径，找不到返回 None。"""
@@ -65,6 +69,7 @@ def find_analysis_dir(books_dir, book_name):
 
 def load_4d_json(analysis_dir):
     """加载 6 份 4D 拆解 JSON。返回 dict，缺少的文件 key 为 None。"""
+    # Must match REQUIRED_ANALYSIS_FILES in 4d_pipeline/validate_analysis.py.
     files = {
         "preprocess": "preprocess_output.json",
         "skeleton": "agent_a_skeleton.json",
@@ -85,6 +90,88 @@ def load_4d_json(analysis_dir):
         else:
             result[key] = None
     return result
+
+
+# ── Phase 2D: Manifest integration ────────────────────────
+
+
+def _read_manifest(analysis_dir):
+    """Read optional validation manifest from analysis directory.
+
+    Args:
+        analysis_dir: Path (Path object) to the analysis directory.
+
+    Returns:
+        dict or None: The parsed manifest, or None if missing/unreadable.
+    """
+    manifest_path = analysis_dir / MANIFEST_FILENAME
+    if not manifest_path.exists():
+        return None
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return None
+
+
+def _build_manifest_info(manifest):
+    """Derive manifest metadata for JSON output.
+
+    Args:
+        manifest: Parsed manifest dict, or None if not available.
+
+    Returns:
+        tuple: (validated, manifest_status, manifest_warnings, manifest_note)
+    """
+    if manifest is None:
+        return (
+            False,
+            "missing",
+            ["未找到验证清单 analysis_manifest.json，建议运行: python 4d_pipeline/validate_analysis.py <analysis_dir> --write-manifest"],
+            "4D 拆解产物未经 validate_analysis.py 验证",
+        )
+
+    schema = manifest.get("schema_version", "")
+    status = manifest.get("status", "")
+    warnings = manifest.get("warnings", [])
+
+    if schema != EXPECTED_MANIFEST_SCHEMA:
+        return (
+            False,
+            "unsupported",
+            [f"Manifest schema 版本不匹配: 期望 {EXPECTED_MANIFEST_SCHEMA}，实际为 {schema}"],
+            f"发现 schema_version={schema}，仍尝试加载原始 JSON",
+        )
+
+    if status == "ok":
+        return (True, "ok", [], None)
+
+    if status == "degraded":
+        return (
+            False,
+            "degraded",
+            warnings,
+            "部分拆解产物有效，仍尝试加载可用 JSON",
+        )
+
+    if status == "invalid":
+        return (
+            False,
+            "invalid",
+            warnings,
+            "无可用的拆解产物，但继续尝试加载原始 JSON",
+        )
+
+    # Unknown / unexpected status
+    return (
+        False,
+        "unsupported",
+        [f"Manifest 状态未知: {status}"],
+        f"发现未知状态 '{status}'，仍尝试加载原始 JSON",
+    )
+
+
+# ── End Phase 2D ──────────────────────────────────────────
 
 
 def _extract_core_conclusion(skeleton):
@@ -419,13 +506,32 @@ def main():
         print(json.dumps(result, ensure_ascii=False) if args.json else f"⚠️ {result['error']}")
         return
 
+    # Phase 2D: Read optional validation manifest
+    _manifest = _read_manifest(analysis_dir)
+    validated, manifest_status, manifest_warnings, manifest_note = _build_manifest_info(_manifest)
+
     data = load_4d_json(analysis_dir)
     if not any(v is not None for v in data.values()):
-        result = {"ok": False, "error": f"分析目录存在但无可读的 JSON 文件: {analysis_dir}"}
+        result = {
+            "ok": False,
+            "error": f"分析目录存在但无可读的 JSON 文件: {analysis_dir}",
+            "validated": validated,
+            "manifest_status": manifest_status,
+            "manifest_warnings": manifest_warnings,
+            "manifest_note": manifest_note,
+        }
         print(json.dumps(result, ensure_ascii=False) if args.json else f"⚠️ {result['error']}")
         return
 
-    output = {"ok": True, "book": args.book, "analysis_dir": str(analysis_dir)}
+    output = {
+        "ok": True,
+        "book": args.book,
+        "analysis_dir": str(analysis_dir),
+        "validated": validated,
+        "manifest_status": manifest_status,
+        "manifest_warnings": manifest_warnings,
+        "manifest_note": manifest_note,
+    }
 
     if args.mode in ("compact", "all"):
         output["compact_summary"] = generate_compact_summary(data)
@@ -448,6 +554,9 @@ def main():
             print(f"知识种子: {json.dumps(output['seeds'], ensure_ascii=False, indent=2)}")
         if "reading_mode_hint" in output:
             print(f"推荐模式: {output['reading_mode_hint']['primary']} ({output['reading_mode_hint']['reason']})")
+        # Phase 2D: Brief manifest note for human output (non-blocking)
+        if manifest_status != "ok" and manifest_note:
+            print(f"   [{manifest_status}] {manifest_note}")
 
 
 if __name__ == "__main__":
